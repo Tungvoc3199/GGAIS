@@ -56,28 +56,34 @@ export function checkLessonConflicts(
   },
   existingLessons: Lesson[],
   instructors: Instructor[],
-  vehicles: Vehicle[]
+  vehicles: Vehicle[],
+  settings?: AppSettings,
+  students?: Student[]
 ): ConflictResult {
   const reasons: string[] = [];
   const start = newLesson.startTime;
   const end = newLesson.endTime;
+  const startM = timeToMinutes(start);
+  const endM = timeToMinutes(end);
 
   // Validate basic operational constraints
-  if (timeToMinutes(end) <= timeToMinutes(start)) {
+  if (endM <= startM) {
     reasons.push('Giờ kết thúc phải lớn hơn giờ bắt đầu.');
     return { hasConflict: true, reasons };
   }
 
-  // 1. Check constraints agains holidays/working hours
+  const student = students?.find(s => s.id === newLesson.studentId);
+  const buffer = settings?.autoSchedulingRules?.safetyBufferMinutes || 0;
+  const maxDayLessons = settings?.autoSchedulingRules?.maxLessonsPerStudentPerDay || 1;
+
+  // 1. Check constraints against holidays/working hours
   const teacher = instructors.find(i => i.id === newLesson.instructorId);
   if (teacher) {
     // Check if within working hours
     const teachStart = timeToMinutes(teacher.workingHours.start);
     const teachEnd = timeToMinutes(teacher.workingHours.end);
-    const lessonStart = timeToMinutes(start);
-    const lessonEnd = timeToMinutes(end);
 
-    if (lessonStart < teachStart || lessonEnd > teachEnd) {
+    if (startM < teachStart || endM > teachEnd) {
       reasons.push(
         `Ngoài khung giờ làm việc của GV ${teacher.name} (${teacher.workingHours.start} - ${teacher.workingHours.end})`
       );
@@ -103,7 +109,41 @@ export function checkLessonConflicts(
     reasons.push(`Xe tập ${car.name} (${car.plate}) đang ở trạng thái: ${car.status}.`);
   }
 
-  // 2. Overlap checks
+  if (student) {
+    // Max lessons limit per day per student
+    const studentLessonsOnDay = existingLessons.filter(l => 
+      l.studentId === newLesson.studentId && 
+      l.date === newLesson.date &&
+      l.id !== newLesson.id &&
+      l.status !== 'Học viên báo nghỉ' && 
+      l.status !== 'Giảng viên báo nghỉ' && 
+      l.status !== 'Hủy lịch'
+    ).length;
+
+    if (studentLessonsOnDay >= maxDayLessons) {
+      reasons.push(`Học viên ${student.name} đã đăng ký học tối đa ${maxDayLessons} ca trong ngày ${newLesson.date}.`);
+    }
+
+    // Instructor license compatibility
+    if (teacher && !teacher.vehicleTypes.includes(student.licenseClass)) {
+      reasons.push(`Hạng bằng học viên (${student.licenseClass}) nằm ngoài phân loại có tuyển của giảng viên ${teacher.name} (${teacher.vehicleTypes.join(', ')}).`);
+    }
+
+    // Vehicle license & transmission compatibility
+    if (car) {
+      if (car.suitableLicenseClass && car.suitableLicenseClass !== student.licenseClass) {
+        reasons.push(`Xe tập ${car.name} (${car.plate}) chỉ phù hợp đào tạo hạng ${car.suitableLicenseClass}, học viên ký hạng ${student.licenseClass}.`);
+      }
+
+      if (student.licenseClass === 'B số tự động' && car.transmission !== 'Số tự động') {
+        reasons.push(`Học viên học hạng B số tự động (B1) không được xếp tập trên xe Số sàn (Manual).`);
+      } else if ((student.licenseClass === 'B số sàn' || student.licenseClass === 'C1') && car.transmission !== 'Số sàn') {
+        reasons.push(`Học viên học hạng ${student.licenseClass} không được xếp tập trên xe Số tự động (Automatic).`);
+      }
+    }
+  }
+
+  // 2. Overlap and Safety buffer checks
   for (const lesson of existingLessons) {
     if (lesson.id === newLesson.id) continue; // Skip itself if editing
     // Cancelled lessons do not hold slots
@@ -112,16 +152,33 @@ export function checkLessonConflicts(
     }
 
     if (lesson.date === newLesson.date) {
-      const overlap = doIntervalsOverlap(start, end, lesson.startTime, lesson.endTime);
-      if (overlap) {
+      const itemStartM = timeToMinutes(lesson.startTime);
+      const itemEndM = timeToMinutes(lesson.endTime);
+      
+      const overlap = startM < itemEndM && itemStartM < endM;
+      const bufferOverlap = startM < itemEndM + buffer && itemStartM - buffer < endM;
+
+      if (bufferOverlap) {
         if (lesson.studentId === newLesson.studentId) {
-          reasons.push(`Học viên đã bận lịch học khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          if (overlap) {
+            reasons.push(`Học viên đã bận lịch học khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          } else {
+            reasons.push(`Khoảng nghỉ của học viên giữa các ca chưa đạt thiết lập tối thiểu ${buffer} phút (${lesson.startTime} - ${lesson.endTime}).`);
+          }
         }
         if (lesson.instructorId === newLesson.instructorId) {
-          reasons.push(`Giảng viên bận dạy lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          if (overlap) {
+            reasons.push(`Giảng viên bận dạy lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          } else {
+            reasons.push(`Giảng viên kẹt mốc thời gian nghỉ tối thiểu ${buffer} phút với ca dạy kề nhau (${lesson.startTime} - ${lesson.endTime}).`);
+          }
         }
         if (lesson.vehicleId === newLesson.vehicleId) {
-          reasons.push(`Xe tập lái (${car?.plate || 'Phân công'}) đã bận phục vụ lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          if (overlap) {
+            reasons.push(`Xe tập lái (${car?.plate || 'Phân công'}) đã bận phục vụ lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
+          } else {
+            reasons.push(`Xe tập lái cần khoảng nghỉ tối thiểu ${buffer} phút trước ca tiếp theo (${lesson.startTime} - ${lesson.endTime}).`);
+          }
         }
       }
     }

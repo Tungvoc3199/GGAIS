@@ -24,6 +24,7 @@ import {
   defaultSettings
 } from '../mockData';
 import { auth, db } from '../services/firebase';
+import { runTransaction, doc } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
@@ -297,16 +298,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           localStorage.setItem('lhp_user', JSON.stringify(profile));
           await loadFirestoreData();
         } else {
-          // Fallback doc creation if profile missing in user DB but exists in firebase auth
-          const fallback: User = {
-            uid: fbUser.uid,
-            email: fbUser.email || '',
-            displayName: fbUser.displayName || fbUser.email?.split('@')[0] || 'User',
-            role: 'Staff'
-          };
-          setCurrentUser(fallback);
-          localStorage.setItem('lhp_user', JSON.stringify(fallback));
-          await loadFirestoreData();
+          // Untrusted account with no server-managed profile - force signOut and deny access
+          await signOut(auth);
+          setCurrentUser(null);
+          localStorage.removeItem('lhp_user');
+          console.warn('Session khôi phục từ chối: Tài khoản chưa được biên chế trong cơ sở dữ liệu hệ thống.');
         }
       } catch (err) {
         console.error('Lỗi khởi tạo session:', err);
@@ -322,20 +318,30 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Helper helper to load mock sets locally
   const loadDataFromLocalStorage = () => {
+    const isMockSeeded = localStorage.getItem('lhp_mock_seeded');
+    if (!isMockSeeded) {
+      localStorage.setItem('lhp_students', JSON.stringify(mockStudents));
+      localStorage.setItem('lhp_instructors', JSON.stringify(mockInstructors));
+      localStorage.setItem('lhp_vehicles', JSON.stringify(mockVehicles));
+      localStorage.setItem('lhp_lessons', JSON.stringify(mockLessons));
+      localStorage.setItem('lhp_payments', JSON.stringify(mockPayments));
+      localStorage.setItem('lhp_mock_seeded', 'true');
+    }
+
     const sStudents = localStorage.getItem('lhp_students');
-    setStudents(sStudents ? JSON.parse(sStudents) : mockStudents);
+    setStudents(sStudents ? JSON.parse(sStudents) : []);
 
     const sInstructors = localStorage.getItem('lhp_instructors');
-    setInstructors(sInstructors ? JSON.parse(sInstructors) : mockInstructors);
+    setInstructors(sInstructors ? JSON.parse(sInstructors) : []);
 
     const sVehicles = localStorage.getItem('lhp_vehicles');
-    setVehicles(sVehicles ? JSON.parse(sVehicles) : mockVehicles);
+    setVehicles(sVehicles ? JSON.parse(sVehicles) : []);
 
     const sLessons = localStorage.getItem('lhp_lessons');
-    setLessons(sLessons ? JSON.parse(sLessons) : mockLessons);
+    setLessons(sLessons ? JSON.parse(sLessons) : []);
 
     const sPayments = localStorage.getItem('lhp_payments');
-    setPayments(sPayments ? JSON.parse(sPayments) : mockPayments);
+    setPayments(sPayments ? JSON.parse(sPayments) : []);
 
     const sSettings = localStorage.getItem('lhp_settings');
     setSettings(sSettings ? JSON.parse(sSettings) : defaultSettings);
@@ -356,32 +362,46 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Keep local storage synchronized for fallback
   useEffect(() => {
-    if (students.length > 0) localStorage.setItem('lhp_students', JSON.stringify(students));
-  }, [students]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_students', JSON.stringify(students));
+    }
+  }, [students, authInitialized]);
 
   useEffect(() => {
-    if (instructors.length > 0) localStorage.setItem('lhp_instructors', JSON.stringify(instructors));
-  }, [instructors]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_instructors', JSON.stringify(instructors));
+    }
+  }, [instructors, authInitialized]);
 
   useEffect(() => {
-    if (vehicles.length > 0) localStorage.setItem('lhp_vehicles', JSON.stringify(vehicles));
-  }, [vehicles]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_vehicles', JSON.stringify(vehicles));
+    }
+  }, [vehicles, authInitialized]);
 
   useEffect(() => {
-    if (lessons.length > 0) localStorage.setItem('lhp_lessons', JSON.stringify(lessons));
-  }, [lessons]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_lessons', JSON.stringify(lessons));
+    }
+  }, [lessons, authInitialized]);
 
   useEffect(() => {
-    if (payments.length > 0) localStorage.setItem('lhp_payments', JSON.stringify(payments));
-  }, [payments]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_payments', JSON.stringify(payments));
+    }
+  }, [payments, authInitialized]);
 
   useEffect(() => {
-    localStorage.setItem('lhp_settings', JSON.stringify(settings));
-  }, [settings]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_settings', JSON.stringify(settings));
+    }
+  }, [settings, authInitialized]);
 
   useEffect(() => {
-    if (auditLogs.length > 0) localStorage.setItem('lhp_audit_logs', JSON.stringify(auditLogs));
-  }, [auditLogs]);
+    if (authInitialized) {
+      localStorage.setItem('lhp_audit_logs', JSON.stringify(auditLogs));
+    }
+  }, [auditLogs, authInitialized]);
 
 
   // Logging action helper
@@ -411,7 +431,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const login = async (email: string, role: UserRole, password = 'DefaultPassword123'): Promise<boolean> => {
     setLoading(true);
     let uName = email.split('@')[0].toUpperCase();
-
+ 
     if (isFirebase) {
       try {
         // Set persistence
@@ -422,44 +442,30 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         try {
           userCredential = await signInWithEmailAndPassword(auth, email, password);
         } catch (authError: any) {
-          // Auto register on mock auth to avoid password barrier during manual setups
-          if (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential') {
-            console.log('Tài khoản chưa tồn tại, tự động thiết lập đăng ký mới...');
-            try {
-              userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            } catch (regError: any) {
-              if (regError.code === 'auth/email-already-in-use') {
-                throw new Error('Mật khẩu nhập vào không chính xác cho tài khoản này.');
-              } else {
-                throw regError;
-              }
-            }
+          // Remove auto-registration. Only allow credentials verify
+          if (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password') {
+            throw new Error('Đăng nhập thất bại: Tài khoản hoặc mật khẩu không chính xác.');
           } else {
             throw authError;
           }
         }
-
+ 
         const fbUser = userCredential.user;
         let profile = await getUserProfile(fbUser.uid);
-
+ 
         if (!profile) {
-          // Create new Firestore document mapping selected role
-          profile = {
-            uid: fbUser.uid,
-            email: fbUser.email || email,
-            displayName: uName === 'ADMIN' ? 'Nguyễn Anh Dương' : uName === 'HUNG.NV' ? 'Thầy Hùng' : `${uName} (Văn Phòng)`,
-            role: role
-          };
-          await createUserProfile(fbUser.uid, profile);
+          // Deny login, clear credentials
+          await signOut(auth);
+          throw new Error('Quyền truy cập bị từ chối: Tài khoản chưa được Quản trị viên (Admin) tạo hoặc phân quyền trên hệ thống.');
         }
-
+ 
         setCurrentUser(profile);
         localStorage.setItem('lhp_user', JSON.stringify(profile));
-
+ 
         // Load Live Firestore Data
         await loadFirestoreData();
-
-        await addAuditLog('Đăng nhập', `Đăng nhập thành công với tài khoản Cloud Auth (${role}).`);
+ 
+        await addAuditLog('Đăng nhập', `Đăng nhập thành công với tài khoản Cloud Auth (${profile.role}).`);
         setLoading(false);
         return true;
       } catch (err: any) {
@@ -480,7 +486,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           setCurrentUser(mockUser);
           localStorage.setItem('lhp_user', JSON.stringify(mockUser));
           setLoading(false);
-
+ 
           // Logging
           const logNewLog: AuditLog = {
             id: generateUniqueId('log'),
@@ -509,7 +515,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setCurrentUser(mockUser);
       localStorage.setItem('lhp_user', JSON.stringify(mockUser));
       setLoading(false);
-
+ 
       // Logging
       const logNewLog: AuditLog = {
         id: generateUniqueId('log'),
@@ -597,63 +603,99 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // --- STUDENT ACTIONS ---
   const addStudent = async (newS: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => {
-    const nextNum = students.length + 1;
-    const code = `HV-26-${String(nextNum).padStart(4, '0')}`;
+    const yy = new Date().getFullYear().toString().slice(-2);
+    let code = `HV-${yy}-0001`;
     const id = generateUniqueId('stud');
-    const freshStudent: Student = {
-      ...newS,
-      id,
-      code,
-      paidAmount: 0,
-      remainingAmount: newS.totalFee,
-      completedSessions: 0,
-      remainingSessions: newS.totalSessions
-    };
-
-    setStudents(prev => [freshStudent, ...prev]);
 
     if (isFirebase) {
       try {
-        await saveStudentDoc(freshStudent);
-      } catch (err) {
-        console.error('Lỗi khi lưu Student vào Firestore:', err);
+        const counterRef = doc(db, 'settings', 'studentCounter');
+        
+        await runTransaction(db, async (transaction) => {
+          const counterDoc = await transaction.get(counterRef);
+          let nextNum = 1;
+          if (counterDoc.exists()) {
+            nextNum = (counterDoc.data().nextCodeNo || 1);
+          }
+          code = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
+          
+          // Increment transaction counter
+          transaction.set(counterRef, { nextCodeNo: nextNum + 1 }, { merge: true });
+
+          const freshStudent: Student = {
+            ...newS,
+            id,
+            code,
+            paidAmount: 0,
+            remainingAmount: newS.totalFee,
+            completedSessions: 0,
+            remainingSessions: newS.totalSessions
+          };
+
+          const studentDocRef = doc(db, 'students', id);
+          transaction.set(studentDocRef, freshStudent);
+        });
+
+        // Refetch newest states from Firestore
+        await loadFirestoreData();
+      } catch (err: any) {
+        console.error('Lỗi khi đăng ký học viên (Firestore Transaction):', err);
+        throw err;
       }
+    } else {
+      // Local Simulation Sequence Formula: max suffix + 1
+      const maxNum = students.reduce((acc, curr) => {
+        const parts = curr.code.split('-');
+        const parsed = Number(parts[parts.length - 1]);
+        return (!isNaN(parsed) && parsed > acc) ? parsed : acc;
+      }, 0);
+      const nextNum = maxNum + 1;
+      code = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
+
+      const freshStudent: Student = {
+        ...newS,
+        id,
+        code,
+        paidAmount: 0,
+        remainingAmount: newS.totalFee,
+        completedSessions: 0,
+        remainingSessions: newS.totalSessions
+      };
+
+      setStudents(prev => [freshStudent, ...prev]);
     }
 
-    await addAuditLog('Thêm học viên mới', `Đăng ký thành công học viên: ${freshStudent.name} (${code}) khóa học ${freshStudent.courseType}.`);
+    await addAuditLog('Thêm học viên mới', `Đăng ký thành công học viên: ${newS.name} (${code}) khóa học ${newS.courseType}.`);
   };
 
   const updateStudent = async (id: string, updated: Partial<Student>) => {
-    let affectedStudent: Student | undefined;
+    let mergedStudent: Student | undefined;
 
     setStudents(prev => prev.map(s => {
       if (s.id === id) {
-        affectedStudent = s;
         const after = { ...s, ...updated };
         after.remainingAmount = Math.max(0, after.totalFee - after.paidAmount);
         after.remainingSessions = Math.max(0, after.totalSessions - after.completedSessions);
+        mergedStudent = after;
         return after;
       }
       return s;
     }));
 
-    // Find the latest full state
-    setTimeout(async () => {
-      const fullDoc = students.find(s => s.id === id);
-      if (fullDoc && isFirebase) {
-        try {
-          const merged = { ...fullDoc, ...updated };
-          merged.remainingAmount = Math.max(0, merged.totalFee - merged.paidAmount);
-          merged.remainingSessions = Math.max(0, merged.totalSessions - merged.completedSessions);
-          await saveStudentDoc(merged);
-        } catch (err) {
-          console.error('Lỗi updateStudent Firestore:', err);
+    if (isFirebase) {
+      setTimeout(async () => {
+        if (mergedStudent) {
+          try {
+            await saveStudentDoc(mergedStudent);
+          } catch (err) {
+            console.error('Lỗi updateStudent Firestore:', err);
+          }
         }
-      }
-    }, 100);
+      }, 0);
+    }
 
-    // Audit logs for student edit as required
-    await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${affectedStudent?.name || id}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    const sName = mergedStudent?.name || id;
+    await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${sName}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
   };
 
   const deleteStudent = async (id: string) => {
@@ -948,21 +990,30 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateInstructor = async (id: string, updated: Partial<Instructor>) => {
-    setInstructors(prev => prev.map(i => i.id === id ? { ...i, ...updated } : i));
+    let mergedIns: Instructor | undefined;
 
-    setTimeout(async () => {
-      const fullDoc = instructors.find(i => i.id === id);
-      if (fullDoc && isFirebase) {
-        try {
-          await saveInstructorDoc({ ...fullDoc, ...updated });
-        } catch (err) {
-          console.error(err);
-        }
+    setInstructors(prev => prev.map(i => {
+      if (i.id === id) {
+        mergedIns = { ...i, ...updated };
+        return mergedIns;
       }
-    }, 100);
+      return i;
+    }));
 
-    const name = instructors.find(i => i.id === id)?.name || id;
-    await addAuditLog('Sửa giảng viên', `Thay đổi thông tin hành chính của Thầy ${name}.`);
+    if (isFirebase) {
+      setTimeout(async () => {
+        if (mergedIns) {
+          try {
+            await saveInstructorDoc(mergedIns);
+          } catch (err) {
+            console.error('Lỗi updateInstructor Firestore:', err);
+          }
+        }
+      }, 0);
+    }
+
+    const insName = mergedIns?.name || id;
+    await addAuditLog('Sửa giảng viên', `Thay đổi thông tin hành chính của Thầy ${insName}.`);
   };
 
   // --- VEHICLE ACTIONS ---
@@ -987,21 +1038,30 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateVehicle = async (id: string, updated: Partial<Vehicle>) => {
-    setVehicles(prev => prev.map(v => v.id === id ? { ...v, ...updated } : v));
+    let mergedVeh: Vehicle | undefined;
 
-    setTimeout(async () => {
-      const fullDoc = vehicles.find(v => v.id === id);
-      if (fullDoc && isFirebase) {
-        try {
-          await saveVehicleDoc({ ...fullDoc, ...updated });
-        } catch (err) {
-          console.error(err);
-        }
+    setVehicles(prev => prev.map(v => {
+      if (v.id === id) {
+        mergedVeh = { ...v, ...updated };
+        return mergedVeh;
       }
-    }, 100);
+      return v;
+    }));
 
-    const name = vehicles.find(v => v.id === id)?.name || id;
-    await addAuditLog('Bảo dưỡng / Sửa trạng thái xe', `Cập nhật hồ sơ vận hành của xe tập lái ${name}.`);
+    if (isFirebase) {
+      setTimeout(async () => {
+        if (mergedVeh) {
+          try {
+            await saveVehicleDoc(mergedVeh);
+          } catch (err) {
+            console.error('Lỗi updateVehicle Firestore:', err);
+          }
+        }
+      }, 0);
+    }
+
+    const vehName = mergedVeh?.name || id;
+    await addAuditLog('Bảo dưỡng / Sửa trạng thái xe', `Cập nhật hồ sơ vận hành của xe tập lái ${vehName}.`);
   };
 
   const deleteVehicle = async (id: string) => {

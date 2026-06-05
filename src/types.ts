@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type UserRole = 'Admin' | 'Instructor' | 'Staff';
+export type UserRole = 'Admin' | 'Instructor' | 'Staff' | 'Accountant';
 
 export interface User {
   uid: string;
@@ -39,6 +39,9 @@ export interface Student {
   notes: string;
   reminderStatus: 'Chưa nhắc' | 'Đã nhắc' | 'Đã hẹn ngày thanh toán';
   tags?: string[];
+  cccdImage?: string;
+  avatarImage?: string;
+  eidImage?: string;
 }
 
 export interface Instructor {
@@ -54,6 +57,10 @@ export interface Instructor {
   daysOff: string[]; // ISO Dates of exceptional holidays (e.g., ["2026-06-15"])
   active: boolean;
   notes: string;
+  code?: string;
+  teachingCertificate?: string;
+  experienceYears?: number;
+  status?: 'Đang dạy' | 'Tạm nghỉ' | 'Nghỉ việc';
 }
 
 export type VehicleStatus = 'Sẵn sàng' | 'Đang sử dụng' | 'Bảo dưỡng' | 'Tạm ngưng';

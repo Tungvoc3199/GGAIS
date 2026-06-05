@@ -174,27 +174,85 @@ export function runAdvancedSchedulingEngine(
     const student = item.student;
     if (!student) continue;
 
-    // Determine candidate instructor and vehicle pools:
-    // If param specifies preferred instructor/vehicle, use that.
-    // Otherwise fallback to student's assigned assignment, or try to balance workloads.
-    let eligibleInstructors = instructors.filter(i => i.active);
+    // Helper to calculate total workloads within this range in simulatedLessons
+    const getInstructorWorkload = (instId: string) => {
+      return simulatedLessons.filter(l => 
+        l.instructorId === instId && 
+        l.date >= params.startDate && 
+        l.date <= params.endDate &&
+        l.status !== 'Học viên báo nghỉ' && 
+        l.status !== 'Giảng viên báo nghỉ' && 
+        l.status !== 'Hủy lịch'
+      ).length;
+    };
+
+    const getVehicleWorkload = (vehId: string) => {
+      return simulatedLessons.filter(l => 
+        l.vehicleId === vehId && 
+        l.date >= params.startDate && 
+        l.date <= params.endDate &&
+        l.status !== 'Học viên báo nghỉ' && 
+        l.status !== 'Giảng viên báo nghỉ' && 
+        l.status !== 'Hủy lịch'
+      ).length;
+    };
+
+    // Determine candidate instructor pools:
+    let eligibleInstructors: Instructor[] = [];
     if (params.preferredInstructorId && params.preferredInstructorId !== 'auto') {
-      eligibleInstructors = eligibleInstructors.filter(i => i.id === params.preferredInstructorId);
-    } else if (student.assignedInstructorId) {
-      // Try student's assigned instructor first
-      const assigned = instructors.find(i => i.id === student.assignedInstructorId && i.active);
-      if (assigned) {
-        eligibleInstructors = [assigned];
+      eligibleInstructors = instructors.filter(i => i.active && i.id === params.preferredInstructorId);
+    } else {
+      // Two-pass instructor workloads balancing
+      // Filter only active trainers compatible with student's license class
+      const compatibleInsts = instructors.filter(i => i.active && i.vehicleTypes.includes(student.licenseClass));
+      
+      let assignedInst: Instructor | undefined;
+      if (student.assignedInstructorId) {
+        assignedInst = compatibleInsts.find(i => i.id === student.assignedInstructorId);
+      }
+
+      const otherCompatibleInsts = compatibleInsts.filter(i => !assignedInst || i.id !== assignedInst.id)
+        .sort((a, b) => getInstructorWorkload(a.id) - getInstructorWorkload(b.id));
+
+      if (assignedInst) {
+        eligibleInstructors = [assignedInst, ...otherCompatibleInsts];
+      } else {
+        eligibleInstructors = otherCompatibleInsts;
       }
     }
 
-    let eligibleVehicles = vehicles;
+    // Determine candidate vehicle pools:
+    let eligibleVehicles: Vehicle[] = [];
+    const isVehicleCompatible = (veh: Vehicle, license: string) => {
+      if (veh.status !== 'Sẵn sàng') return false;
+      if (veh.suitableLicenseClass && veh.suitableLicenseClass !== license) return false;
+      
+      if (license === 'B số tự động') {
+        return veh.transmission === 'Số tự động';
+      } else if (license === 'B số sàn' || license === 'C1') {
+        return veh.transmission === 'Số sàn';
+      }
+      return true;
+    };
+
     if (params.preferredVehicleId && params.preferredVehicleId !== 'auto') {
       eligibleVehicles = vehicles.filter(v => v.id === params.preferredVehicleId);
-    } else if (student.assignedVehicleId) {
-      const assigned = vehicles.find(v => v.id === student.assignedVehicleId);
-      if (assigned) {
-        eligibleVehicles = [assigned];
+    } else {
+      // Two-pass vehicle workloads balancing
+      const compatibleVehs = vehicles.filter(v => isVehicleCompatible(v, student.licenseClass));
+      
+      let assignedVeh: Vehicle | undefined;
+      if (student.assignedVehicleId) {
+        assignedVeh = compatibleVehs.find(v => v.id === student.assignedVehicleId);
+      }
+
+      const otherCompatibleVehs = compatibleVehs.filter(v => !assignedVeh || v.id !== assignedVeh.id)
+        .sort((a, b) => getVehicleWorkload(a.id) - getVehicleWorkload(b.id));
+
+      if (assignedVeh) {
+        eligibleVehicles = [assignedVeh, ...otherCompatibleVehs];
+      } else {
+        eligibleVehicles = otherCompatibleVehs;
       }
     }
 
@@ -236,7 +294,8 @@ export function runAdvancedSchedulingEngine(
             simulatedLessons,
             instructors,
             vehicles,
-            settings
+            settings,
+            students
           );
 
           if (conflictCheck.length === 0) {
@@ -301,7 +360,8 @@ export function runAdvancedSchedulingEngine(
                 simulatedLessons,
                 instructors,
                 vehicles,
-                settings
+                settings,
+                students
               );
 
               if (check.length === 0) {
@@ -431,7 +491,8 @@ export function evaluateIndividualAndWorkloadConflicts(
   existingLessons: Lesson[],
   instructors: Instructor[],
   vehicles: Vehicle[],
-  settings: AppSettings
+  settings: AppSettings,
+  students: Student[]
 ): ConflictExplanation[] {
   const conflicts: ConflictExplanation[] = [];
   const startM = timeToMinutes(lesson.startTime);
@@ -454,6 +515,10 @@ export function evaluateIndividualAndWorkloadConflicts(
       message: `Ca học nằm ngoài khung giờ mở cửa của trường (${settings.workingHours.start} - ${settings.workingHours.end}).`
     });
   }
+
+  const student = students.find(s => s.id === lesson.studentId);
+  const buffer = settings.autoSchedulingRules?.safetyBufferMinutes || 0;
+  const maxDayLessons = settings.autoSchedulingRules?.maxLessonsPerStudentPerDay || 1;
 
   // Constraint: Instructor Day Off, workingDays and Availability
   const teacher = instructors.find(i => i.id === lesson.instructorId);
@@ -514,32 +579,106 @@ export function evaluateIndividualAndWorkloadConflicts(
     });
   }
 
-  // Constraint: Double Booking Overlaps
+  if (student) {
+    // Constraint: maxLessonsPerStudentPerDay Limit
+    const studentLessonsOnDay = existingLessons.filter(l => 
+      l.studentId === lesson.studentId && 
+      l.date === lesson.date &&
+      l.status !== 'Học viên báo nghỉ' && 
+      l.status !== 'Giảng viên báo nghỉ' && 
+      l.status !== 'Hủy lịch'
+    ).length;
+
+    if (studentLessonsOnDay >= maxDayLessons) {
+      conflicts.push({
+        type: 'STUDENT_CONFLICT',
+        message: `Học viên ${student.name} đã học tối đa ${maxDayLessons} ca/ngày theo quy định.`
+      });
+    }
+
+    // Constraint: License compatibility check with instructor.vehicleTypes
+    if (teacher && !teacher.vehicleTypes.includes(student.licenseClass)) {
+      conflicts.push({
+        type: 'INSTRUCTOR_OFF',
+        message: `Hạng bằng của Học viên (${student.licenseClass}) nằm ngoài phân loại có thể dạy của Giảng viên ${teacher.name} (${teacher.vehicleTypes.join(', ')}).`
+      });
+    }
+
+    // Constraint: License compatibility check with vehicle.suitableLicenseClass & transmission
+    if (car) {
+      if (car.suitableLicenseClass && car.suitableLicenseClass !== student.licenseClass) {
+        conflicts.push({
+          type: 'VEHICLE_MAINTENANCE',
+          message: `Xe tập ${car.name} (${car.plate}) chỉ phù hợp đào tạo hạng bằng ${car.suitableLicenseClass}, học viên ký hạng ${student.licenseClass}.`
+        });
+      }
+
+      if (student.licenseClass === 'B số tự động' && car.transmission !== 'Số tự động') {
+        conflicts.push({
+          type: 'VEHICLE_MAINTENANCE',
+          message: `Học viên học hạng B số tự động (B1) không được xếp xe tập Số sàn.`
+        });
+      } else if ((student.licenseClass === 'B số sàn' || student.licenseClass === 'C1') && car.transmission !== 'Số sàn') {
+        conflicts.push({
+          type: 'VEHICLE_MAINTENANCE',
+          message: `Học viên học hạng ${student.licenseClass} không được xếp xe tập Số tự động.`
+        });
+      }
+    }
+  }
+
+  // Constraint: Double Booking Overlaps and Safety Buffer Gap checks
   for (const item of existingLessons) {
     if (item.status === 'Học viên báo nghỉ' || item.status === 'Giảng viên báo nghỉ' || item.status === 'Hủy lịch') {
       continue;
     }
 
     if (item.date === lesson.date) {
+      const itemStartM = timeToMinutes(item.startTime);
+      const itemEndM = timeToMinutes(item.endTime);
+      
       const overlap = checkIntervalOverlap(lesson.startTime, lesson.endTime, item.startTime, item.endTime);
-      if (overlap) {
+      const bufferOverlap = startM < itemEndM + buffer && itemStartM - buffer < endM;
+
+      if (bufferOverlap) {
         if (item.studentId === lesson.studentId) {
-          conflicts.push({
-            type: 'STUDENT_CONFLICT',
-            message: `Học viên đã vướng lịch học khác trùng giờ (${item.startTime} - ${item.endTime}).`
-          });
+          if (overlap) {
+            conflicts.push({
+              type: 'STUDENT_CONFLICT',
+              message: `Học viên đã vướng lịch học khác trùng giờ (${item.startTime} - ${item.endTime}).`
+            });
+          } else {
+            conflicts.push({
+              type: 'STUDENT_CONFLICT',
+              message: `Khoảng nghỉ giữa các ca học học viên chưa đạt tối thiểu ${buffer} phút (${item.startTime} - ${item.endTime}).`
+            });
+          }
         }
         if (item.instructorId === lesson.instructorId) {
-          conflicts.push({
-            type: 'INSTRUCTOR_CONFLICT',
-            message: `Giáo viên ${teacher?.name || 'phân công'} bị kẹt ca dạy khác trùng mốc (${item.startTime} - ${item.endTime}).`
-          });
+          if (overlap) {
+            conflicts.push({
+              type: 'INSTRUCTOR_CONFLICT',
+              message: `Giáo viên ${teacher?.name || 'phân công'} bị kẹt ca dạy khác trùng mốc (${item.startTime} - ${item.endTime}).`
+            });
+          } else {
+            conflicts.push({
+              type: 'INSTRUCTOR_CONFLICT',
+              message: `Giáo viên ${teacher?.name || 'phân công'} cần khoảng nghỉ ${buffer} phút trước ca học tiếp theo (${item.startTime} - ${item.endTime}).`
+            });
+          }
         }
         if (item.vehicleId === lesson.vehicleId) {
-          conflicts.push({
-            type: 'VEHICLE_CONFLICT',
-            message: `Xe tập ${car?.name || ''} (${car?.plate || ''}) bị trùng kẹt phục vụ ca khác (${item.startTime} - ${item.endTime}).`
-          });
+          if (overlap) {
+            conflicts.push({
+              type: 'VEHICLE_CONFLICT',
+              message: `Xe tập ${car?.name || ''} (${car?.plate || ''}) bị trùng kẹt phục vụ ca khác (${item.startTime} - ${item.endTime}).`
+            });
+          } else {
+            conflicts.push({
+              type: 'VEHICLE_CONFLICT',
+              message: `Xe tập ${car?.name || ''} (${car?.plate || ''}) cần khoảng nghỉ vệ sinh/bảo trì ${buffer} phút (${item.startTime} - ${item.endTime}).`
+            });
+          }
         }
       }
     }
@@ -601,7 +740,8 @@ export function executeSchedulingUnitTests(
     baseLessons,
     mockInstructors,
     mockVehicles,
-    mockSettings
+    mockSettings,
+    mockStudents
   );
   
   const studentConflictPassed = conflict1.some(c => c.type === 'STUDENT_CONFLICT');
@@ -641,7 +781,8 @@ export function executeSchedulingUnitTests(
     instLessons,
     mockInstructors,
     mockVehicles,
-    mockSettings
+    mockSettings,
+    mockStudents
   );
   const instructorConflictPassed = conflict2.some(c => c.type === 'INSTRUCTOR_CONFLICT') || conflict2.some(c => c.type === 'VEHICLE_CONFLICT');
   testResults.push({
@@ -680,7 +821,8 @@ export function executeSchedulingUnitTests(
     vehicleLessons,
     mockInstructors,
     mockVehicles,
-    mockSettings
+    mockSettings,
+    mockStudents
   );
   const vehicleConflictPassed = conflict3.some(c => c.type === 'VEHICLE_CONFLICT');
   testResults.push({
@@ -702,7 +844,8 @@ export function executeSchedulingUnitTests(
     [],
     mockInstructors,
     maintenanceVehicles,
-    mockSettings
+    mockSettings,
+    mockStudents
   );
   const maintenancePassed = conflict4.some(c => c.type === 'VEHICLE_MAINTENANCE');
   testResults.push({
@@ -724,7 +867,8 @@ export function executeSchedulingUnitTests(
     [],
     dayOffInstructors,
     mockVehicles,
-    mockSettings
+    mockSettings,
+    mockStudents
   );
   const dayOffPassed = conflict5.some(c => c.type === 'INSTRUCTOR_OFF');
   testResults.push({

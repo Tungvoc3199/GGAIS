@@ -44,6 +44,7 @@ function AppContent() {
 
   // States for triggering modals inside children
   const [quickStudentForm, setQuickStudentForm] = useState(false);
+  const [quickLessonForm, setQuickLessonForm] = useState(false);
 
   if (!currentUser) {
     return <Auth />;
@@ -134,7 +135,7 @@ function AppContent() {
               className={`w-full text-xs font-bold py-3.5 px-4 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-650 hover:to-indigo-650 text-white rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer`}
             >
               <Sparkles className="h-4 w-4 text-amber-300" />
-              <span>Xếp Lịch Tự Động GPT</span>
+              <span>Xếp Lịch Thông Minh Tự Động</span>
             </button>
           </div>
         </div>
@@ -264,7 +265,7 @@ function AppContent() {
                   className="w-full text-xs font-bold py-3 px-4 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-650 hover:to-indigo-650 text-white rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <Sparkles className="h-4 w-4 text-amber-300" />
-                  <span>Xếp Lịch Tự Động GPT</span>
+                  <span>Xếp Lịch Thông Minh Tự Động</span>
                 </button>
               </div>
             </div>
@@ -328,12 +329,33 @@ function AppContent() {
 
       {/* MAIN VIEW CONTROLLER CANVAS */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-20 md:pb-6 relative">
+        {!isFirebase && (
+          <div className="mb-4 rounded-2xl bg-amber-500 text-white p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm border border-amber-600 bg-gradient-to-r from-amber-500 to-orange-500 select-none">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl">⚠️</span>
+              <div className="text-xs font-bold leading-relaxed">
+                <span className="block font-black uppercase tracking-wider text-[10px]">DEMO MODE — DỮ LIỆU KHÔNG ĐỒNG BỘ CLOUD</span>
+                <span className="text-amber-100 font-medium">Lịch học, thu chi lái xe hiện tại được lưu cục bộ trên trình duyệt Web này. Vui lòng thiết lập Firebase để đồng bộ hóa.</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveView('cai-dat')}
+              className="shrink-0 bg-white/20 hover:bg-white/30 text-white rounded-xl px-3.5 py-1.5 text-[10px] font-black tracking-widest uppercase transition-all cursor-pointer"
+            >
+              Xem Cấu Hình
+            </button>
+          </div>
+        )}
+
         {activeView === 'tong-quan' && (
           <Dashboard setView={setActiveView} />
         )}
 
         {activeView === 'lich-hoc' && (
-          <Schedule />
+          <Schedule
+            quickFormOpen={quickLessonForm}
+            onCloseQuickForm={() => setQuickLessonForm(false)}
+          />
         )}
 
         {activeView === 'hoc-vien' && (
@@ -389,11 +411,7 @@ function AppContent() {
                 onClick={() => {
                   setQuickActionOpen(false);
                   setActiveView('hoc-vien');
-                  // Let it open the internal add state!
-                  setTimeout(() => {
-                    const addBtn = document.querySelector('button[class*="bg-blue-600"]') as HTMLElement;
-                    if (addBtn) addBtn.click();
-                  }, 100);
+                  setQuickStudentForm(true);
                 }}
                 className="p-4 bg-slate-50 border border-slate-100 hover:border-blue-150 rounded-2xl flex flex-col items-center justify-center gap-2 text-center cursor-pointer"
               >
@@ -405,10 +423,7 @@ function AppContent() {
                 onClick={() => {
                   setQuickActionOpen(false);
                   setActiveView('lich-hoc');
-                  setTimeout(() => {
-                    const scheduleBtn = document.querySelector('button[class*="bg-blue-600"]') as HTMLElement;
-                    if (scheduleBtn) scheduleBtn.click();
-                  }, 100);
+                  setQuickLessonForm(true);
                 }}
                 className="p-4 bg-slate-50 border border-slate-100 hover:border-blue-150 rounded-2xl flex flex-col items-center justify-center gap-2 text-center cursor-pointer"
               >

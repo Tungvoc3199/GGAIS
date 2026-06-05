@@ -34,6 +34,10 @@ service cloud.firestore {
       return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'Instructor';
     }
 
+    function isAccountant() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'Accountant';
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -53,7 +57,7 @@ service cloud.firestore {
         && data.uid is string && data.uid.size() <= 128
         && data.email is string && data.email.size() <= 128
         && data.displayName is string && data.displayName.size() <= 128
-        && data.role in ['Admin', 'Instructor', 'Staff'];
+        && data.role in ['Admin', 'Instructor', 'Staff', 'Accountant'];
     }
 
     function isValidStudent(data) {
@@ -171,15 +175,15 @@ service cloud.firestore {
 
     // 2. Students Collection
     match /students/{studentId} {
-      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
       allow create: if (isAdmin() || isStaff()) && isValidId(studentId) && isValidStudent(incoming());
-      allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(studentId) && isValidStudent(incoming());
+      allow update: if (isAdmin() || isStaff() || isInstructor() || isAccountant()) && isValidId(studentId) && isValidStudent(incoming());
       allow delete: if isAdmin();
     }
 
     // 3. Instructors Collection
     match /instructors/{instructorId} {
-      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
       allow create: if (isAdmin() || isStaff()) && isValidId(instructorId) && isValidInstructor(incoming());
       allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(instructorId) && isValidInstructor(incoming());
       allow delete: if isAdmin();
@@ -187,7 +191,7 @@ service cloud.firestore {
 
     // 4. Vehicles Collection
     match /vehicles/{vehicleId} {
-      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
       allow create: if (isAdmin() || isStaff()) && isValidId(vehicleId) && isValidVehicle(incoming());
       allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(vehicleId) && isValidVehicle(incoming());
       allow delete: if isAdmin();
@@ -195,7 +199,7 @@ service cloud.firestore {
 
     // 5. Lessons Collection
     match /lessons/{lessonId} {
-      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
       allow create: if (isAdmin() || isStaff() || isInstructor()) && isValidId(lessonId) && isValidLesson(incoming()) && (
         exists(/databases/$(database)/documents/students/$(incoming().studentId)) &&
         exists(/databases/$(database)/documents/instructors/$(incoming().instructorId)) &&
@@ -207,11 +211,11 @@ service cloud.firestore {
 
     // 6. Payments Collection (Ledger Hardening - NO DELETE)
     match /payments/{paymentId} {
-      allow read: if isAdmin() || isStaff();
-      allow create: if (isAdmin() || isStaff()) && isValidId(paymentId) && isValidPayment(incoming()) && (
+      allow read: if isAdmin() || isStaff() || isAccountant();
+      allow create: if (isAdmin() || isStaff() || isAccountant()) && isValidId(paymentId) && isValidPayment(incoming()) && (
         exists(/databases/$(database)/documents/students/$(incoming().studentId))
       );
-      allow update: if isAdmin() && isValidId(paymentId) && isValidPayment(incoming()); // Only Admin can update/cancel payment records
+      allow update: if (isAdmin() || isAccountant()) && isValidId(paymentId) && isValidPayment(incoming()); // Only Admin or Accountant can update/cancel payment records
       allow delete: if false; // STRICT RESTRICTION: No soft or hard deletions of payments from user client
     }
 

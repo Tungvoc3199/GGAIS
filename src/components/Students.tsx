@@ -97,6 +97,15 @@ export const Students: React.FC<StudentsProps> = ({
   // New Student State
   const [isAdding, setIsAdding] = useState(false);
   const [isWaitlist, setIsWaitlist] = useState(false);
+
+  useEffect(() => {
+    if (quickFormOpen && quickFormType === 'student') {
+      setIsAdding(true);
+      if (onCloseQuickForm) {
+        onCloseQuickForm();
+      }
+    }
+  }, [quickFormOpen, quickFormType, onCloseQuickForm]);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newDob, setNewDob] = useState('1998-01-01');
@@ -109,6 +118,13 @@ export const Students: React.FC<StudentsProps> = ({
   const [newVehicleId, setNewVehicleId] = useState('veh_1');
   const [newNotes, setNewNotes] = useState('');
   const [newTags, setNewTags] = useState<string[]>([]);
+
+  // State hooks for identity document upload & smart OCR auto fill
+  const [cccdImage, setCccdImage] = useState<string>('');
+  const [avatarImage, setAvatarImage] = useState<string>('');
+  const [eidImage, setEidImage] = useState<string>('');
+  const [isOcrLoading, setIsOcrLoading] = useState<boolean>(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
   // Local Note Adding
   const [tempNote, setTempNote] = useState('');
@@ -249,6 +265,66 @@ export const Students: React.FC<StudentsProps> = ({
     return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag;
   });
 
+  const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>, cardType: 'cccd' | 'avatar' | 'eid') => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Convert file to base64
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64Str = reader.result as string;
+      if (cardType === 'cccd') {
+        setCccdImage(base64Str);
+      } else if (cardType === 'avatar') {
+        setAvatarImage(base64Str);
+      } else if (cardType === 'eid') {
+        setEidImage(base64Str);
+      }
+
+      // Automatically trigger OCR for CCCD or EID (electronic card) to read name, dob, and address
+      if (cardType === 'cccd' || cardType === 'eid') {
+        setIsOcrLoading(true);
+        try {
+          const typeLabel = cardType === 'cccd' ? 'Căn Cước Công Dân' : 'Căn cước điện tử VNeID';
+          const response = await fetch('/api/ocr-card', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: base64Str, cardType: typeLabel }),
+          });
+          const result = await response.json();
+          if (result.success && result.data) {
+            const { fullName, address, dob } = result.data;
+            if (fullName) {
+              setNewName(fullName);
+            }
+            if (address) {
+              setNewAddress(address);
+            }
+            if (dob) {
+              setNewDob(dob);
+            }
+            alert(`🔍 HỆ THỐNG AI ĐÃ TỰ ĐỘNG QUÉT THẺ THÀNH CÔNG:\n- Họ tên: ${fullName || 'Chưa nhận dạng được'}\n- Ngày sinh: ${dob || 'Chưa nhận dạng được'}\n- Địa chỉ: ${address || 'Chưa nhận dạng được'}`);
+          } else {
+            console.warn('OCR error response: ', result.error);
+            alert(`Lỗi phân tích thẻ từ Gemini: ${result.error || 'Vui lòng điền thông tin học viên bằng tay.'}`);
+          }
+        } catch (err: any) {
+          console.error('OCR API call failed: ', err);
+          alert('Không thể kết nối đến máy chủ nhận dạng AI. Thầy vui lòng điền tay các thông tin.');
+        } finally {
+          setIsOcrLoading(false);
+        }
+      } else {
+        // Just uploaded avatar picture - notify student photo is attached
+        alert('Đã đính kèm ảnh thẻ/ảnh chân dung thành công vào hồ sơ học viên!');
+      }
+    };
+    reader.onerror = () => {
+      alert('Không thể đọc file hình ảnh.');
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleCreateStudent = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName || !newPhone) {
@@ -275,6 +351,7 @@ export const Students: React.FC<StudentsProps> = ({
       address: newAddress,
       licenseClass: newLicenseClass,
       courseType: newCourseType,
+      totalFee: newTotalFee,
       registrationDate: new Date().toISOString().split('T')[0],
       nextPaymentDeadline: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 15 days from now
       status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
@@ -283,7 +360,10 @@ export const Students: React.FC<StudentsProps> = ({
       assignedVehicleId: newVehicleId,
       notes: newNotes,
       reminderStatus: 'Chưa nhắc',
-      tags: newTags
+      tags: newTags,
+      cccdImage,
+      avatarImage,
+      eidImage
     });
 
     // Reset Form
@@ -294,6 +374,9 @@ export const Students: React.FC<StudentsProps> = ({
     setNewTags([]);
     setIsWaitlist(false);
     setIsAdding(false);
+    setCccdImage('');
+    setAvatarImage('');
+    setEidImage('');
   };
 
   const handleSaveNote = () => {
@@ -879,6 +962,160 @@ export const Students: React.FC<StudentsProps> = ({
                     </div>
                   </div>
 
+                  {/* Photocopies of Identification documents and interactive zoom preview */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-3.5 shadow-xs animate-fade-in text-xs">
+                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-50 flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-800 block text-sm">📂</span> 
+                        <span>Hồ sơ ảnh định danh học viên</span>
+                      </div>
+                      <span className="text-[9px] text-slate-400 font-bold italic normal-case">Nhấp ảnh để xem to phóng đại</span>
+                    </h3>
+
+                    <div className="grid grid-cols-3 gap-2.5 text-center font-bold">
+                      {/* CCCD Group of selected Student */}
+                      <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl flex flex-col justify-between items-center relative min-h-24">
+                        <span className="text-[9px] text-slate-500 uppercase tracking-wider block mb-1">Căn cước công dân</span>
+                        {selectedStudent.cccdImage ? (
+                          <div className="w-full flex-1 flex flex-col items-center justify-center">
+                            <img
+                              src={selectedStudent.cccdImage}
+                              alt="Ảnh CCCD"
+                              className="w-full h-12 object-cover rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs"
+                              onClick={() => setPreviewImageUrl(selectedStudent.cccdImage!)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("Gỡ tài liệu ảnh chụp này khỏi hồ sơ học viên?")) {
+                                  updateStudent(selectedStudent.id, { cccdImage: "" });
+                                }
+                              }}
+                              className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
+                            >
+                              Gỡ bỏ
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="flex-1 flex flex-col items-center justify-center cursor-pointer p-1">
+                            <span className="text-lg">🪪</span>
+                            <span className="text-[9px] text-blue-600 hover:underline">Tải lên CCCD</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    updateStudent(selectedStudent.id, { cccdImage: reader.result as string });
+                                    alert("Đã cập nhật ảnh CCCD thành công!");
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+
+                      {/* Avatar Group of selected Student */}
+                      <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl flex flex-col justify-between items-center relative min-h-24">
+                        <span className="text-[9px] text-slate-500 uppercase tracking-wider block mb-1">Ảnh chân dung</span>
+                        {selectedStudent.avatarImage ? (
+                          <div className="w-full flex-1 flex flex-col items-center justify-center">
+                            <img
+                              src={selectedStudent.avatarImage}
+                              alt="Ảnh thẻ"
+                              className="w-12 h-12 object-cover rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs"
+                              onClick={() => setPreviewImageUrl(selectedStudent.avatarImage!)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("Gỡ ảnh chân dung thẻ này khỏi hồ sơ học viên?")) {
+                                  updateStudent(selectedStudent.id, { avatarImage: "" });
+                                }
+                              }}
+                              className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
+                            >
+                              Gỡ bỏ
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="flex-1 flex flex-col items-center justify-center cursor-pointer p-1">
+                            <span className="text-lg">👤</span>
+                            <span className="text-[9px] text-blue-600 hover:underline">Tải ảnh 3x4</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    updateStudent(selectedStudent.id, { avatarImage: reader.result as string });
+                                    alert("Đã cập nhật ảnh thẻ thành công!");
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+
+                      {/* VNeID Group of selected Student */}
+                      <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl flex flex-col justify-between items-center relative min-h-24">
+                        <span className="text-[9px] text-slate-500 uppercase tracking-wider block mb-1">Thẻ VNeID ĐT</span>
+                        {selectedStudent.eidImage ? (
+                          <div className="w-full flex-1 flex flex-col items-center justify-center">
+                            <img
+                              src={selectedStudent.eidImage}
+                              alt="VNeID"
+                              className="w-full h-12 object-cover rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs"
+                              onClick={() => setPreviewImageUrl(selectedStudent.eidImage!)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (confirm("Gỡ tài liệu ảnh chụp này khỏi hồ sơ học viên?")) {
+                                  updateStudent(selectedStudent.id, { eidImage: "" });
+                                }
+                              }}
+                              className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
+                            >
+                              Gỡ bỏ
+                            </button>
+                          </div>
+                        ) : (
+                          <label className="flex-1 flex flex-col items-center justify-center cursor-pointer p-1">
+                            <span className="text-lg">📱</span>
+                            <span className="text-[9px] text-blue-600 hover:underline">Tải lên VNeID</span>
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    updateStudent(selectedStudent.id, { eidImage: reader.result as string });
+                                    alert("Đã cập nhật ảnh VNeID thành công!");
+                                  };
+                                  reader.readAsDataURL(file);
+                                }
+                              }}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-3.5 shadow-xs">
                     <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-50 flex items-center gap-1.5">
                       <Briefcase className="h-4 w-4 text-blue-600" /> Biên chế đào tạo & Xe
@@ -951,22 +1188,49 @@ export const Students: React.FC<StudentsProps> = ({
 
                   <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-3 shadow-xs">
                     <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wide">Yêu cầu đào tạo</h4>
-                    <ul className="text-xs font-bold text-slate-600 space-y-2.5">
-                      <li className="flex justify-between items-center">
-                        <span>Ôn lý thuyết 600 câu & cabin ảo:</span>
-                        <span className="text-emerald-600 font-extrabold flex items-center gap-1">✓ Đã đạt</span>
-                      </li>
-                      <li className="flex justify-between items-center">
-                        <span>Đào tạo đường trường thực tế (DAT):</span>
-                        <span>Đang thực hiện ({selectedStudent.completedSessions * 2}0 / 810 Km)</span>
-                      </li>
-                      <li className="flex justify-between items-center">
-                        <span>Ghép ngang, dọc bãi xe sa hình:</span>
-                        <span className={selectedStudent.completedSessions >= 4 ? 'text-emerald-500' : 'text-slate-400'}>
-                          {selectedStudent.completedSessions >= 4 ? '✓ Đã luyện tốt' : 'Luyện trong buổi kế'}
-                        </span>
-                      </li>
-                    </ul>
+                    {(() => {
+                      const reqDist = selectedStudent.licenseClass === 'B số tự động' ? 710 
+                                    : selectedStudent.licenseClass === 'C1' ? 825
+                                    : ['A1', 'A'].includes(selectedStudent.licenseClass) ? 0
+                                    : 810; // default for "B số sàn" or others
+
+                      const compDist = reqDist > 0 && selectedStudent.totalSessions > 0
+                        ? Math.min(reqDist, Math.round((selectedStudent.completedSessions / selectedStudent.totalSessions) * reqDist))
+                        : 0;
+
+                      return (
+                        <ul className="text-xs font-bold text-slate-600 space-y-2.5">
+                          <li className="flex justify-between items-center">
+                            <span>Ôn lý thuyết & cabin ảo:</span>
+                            <span className="text-emerald-600 font-extrabold flex items-center gap-1">✓ Đã đạt</span>
+                          </li>
+                          <li className="flex justify-between items-center">
+                            <span>Đào tạo đường trường thực tế (DAT):</span>
+                            <span>
+                              {reqDist === 0 ? (
+                                <span className="text-slate-400 italic">Không yêu cầu (Hạng {selectedStudent.licenseClass})</span>
+                              ) : (
+                                <span>
+                                  {compDist >= reqDist ? (
+                                    <span className="text-emerald-600 font-extrabold">✓ Đã đạt ({compDist} / {reqDist} Km)</span>
+                                  ) : (
+                                    <span className="text-slate-700">Đang thực hiện ({compDist} / {reqDist} Km)</span>
+                                  )}
+                                </span>
+                              )}
+                            </span>
+                          </li>
+                          {reqDist > 0 && (
+                            <li className="flex justify-between items-center">
+                              <span>Ghép ngang, dọc bãi xe sa hình:</span>
+                              <span className={selectedStudent.completedSessions >= 4 ? 'text-emerald-500 font-black' : 'text-slate-400'}>
+                                {selectedStudent.completedSessions >= 4 ? '✓ Đã luyện tốt' : 'Luyện trong buổi kế'}
+                              </span>
+                            </li>
+                          )}
+                        </ul>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -1436,8 +1700,8 @@ export const Students: React.FC<StudentsProps> = ({
       {/* MODAL FORM: THÊM HỌC VIÊN MỚI */}
       {isAdding && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-xl rounded-3xl shadow-xl overflow-hidden animate-zoom-in">
-            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+          <div className="bg-white w-full max-w-xl rounded-3xl shadow-xl overflow-hidden animate-zoom-in max-h-[90vh] flex flex-col">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 flex-shrink-0">
               <h2 className="text-base font-black text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
                 <Plus className="h-5 w-5 text-blue-600" /> THÊM HỌC VIÊN MỚI
               </h2>
@@ -1449,7 +1713,111 @@ export const Students: React.FC<StudentsProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleCreateStudent} className="p-5 space-y-4 text-xs font-bold">
+            <form onSubmit={handleCreateStudent} className="p-5 space-y-4 text-xs font-bold overflow-y-auto flex-1">
+              {/* Identity Document Uploader Area */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-205/60 space-y-3 shadow-2xs leading-normal">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-slate-800">
+                    <span className="text-blue-600 font-bold block text-sm">📂</span>
+                    <span className="font-black uppercase tracking-wider text-[10px] text-slate-700">TẢI LÊN HỒ SƠ ĐỊNH DANH HỌC VIÊN</span>
+                  </div>
+                  {isOcrLoading && (
+                    <span className="text-[9px] text-blue-600 font-extrabold tracking-tight animate-pulse flex items-center gap-1 bg-white border border-blue-150 px-2.5 py-1 rounded-full shadow-2xs">
+                      🤖 AI ĐANG ĐỌC THẺ...
+                    </span>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-3 gap-2.5">
+                  {/* CCCD Uploader */}
+                  <div className="relative group border border-dashed rounded-xl p-2 bg-white flex flex-col items-center justify-center text-center cursor-pointer min-h-24 hover:bg-slate-50/50 transition-colors border-slate-200">
+                    {cccdImage ? (
+                      <div className="relative w-full h-full flex flex-col items-center justify-between">
+                        <img src={cccdImage} alt="CCCD" className="w-full h-16 object-cover rounded-lg" />
+                        <span className="text-[9px] text-emerald-600 font-extrabold mt-1 max-w-[120px] truncate flex items-center gap-0.5">✓ CCCD Đã tải</span>
+                        <button
+                          type="button"
+                          onClick={() => setCccdImage('')}
+                          className="absolute -top-1 -right-1 bg-red-50 hover:bg-red-100 p-1 rounded-full text-red-600 shadow-3xs cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer w-full h-full flex flex-col items-center justify-center dialog-file-label">
+                        <span className="text-lg">🪪</span>
+                        <span className="text-[10px] font-black text-blue-600 uppercase tracking-tight">Mặt trước CCCD</span>
+                        <span className="text-[8px] text-slate-400 font-bold mt-0.5 leading-none">Quét lấy họ tên & địa chỉ</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleOcrUpload(e, 'cccd')}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  {/* Avatar Uploader */}
+                  <div className="relative group border border-dashed rounded-xl p-2 bg-white flex flex-col items-center justify-center text-center cursor-pointer min-h-24 hover:bg-slate-50/50 transition-colors border-slate-200">
+                    {avatarImage ? (
+                      <div className="relative w-full h-full flex flex-col items-center justify-between">
+                        <img src={avatarImage} alt="Avatar" className="w-24 h-16 object-cover rounded-lg" />
+                        <span className="text-[9px] text-emerald-600 font-extrabold mt-1 flex items-center gap-0.5">✓ Ảnh thẻ đã tải</span>
+                        <button
+                          type="button"
+                          onClick={() => setAvatarImage('')}
+                          className="absolute -top-1 -right-1 bg-red-50 hover:bg-red-100 p-1 rounded-full text-red-600 shadow-3xs cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer w-full h-full flex flex-col items-center justify-center dialog-file-label">
+                        <span className="text-lg">👤</span>
+                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-tight">Ảnh thẻ 3x4</span>
+                        <span className="text-[8px] text-slate-400 font-bold mt-0.5 leading-none">Làm ảnh thẻ hồ sơ</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleOcrUpload(e, 'avatar')}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  {/* EID Uploader */}
+                  <div className="relative group border border-dashed rounded-xl p-2 bg-white flex flex-col items-center justify-center text-center cursor-pointer min-h-24 hover:bg-slate-50/50 transition-colors border-slate-200">
+                    {eidImage ? (
+                      <div className="relative w-full h-full flex flex-col items-center justify-between">
+                        <img src={eidImage} alt="e-ID" className="w-full h-16 object-cover rounded-lg" />
+                        <span className="text-[9px] text-emerald-600 font-extrabold mt-1 max-w-[120px] truncate flex items-center gap-0.5">✓ VNeID Đã tải</span>
+                        <button
+                          type="button"
+                          onClick={() => setEidImage('')}
+                          className="absolute -top-1 -right-1 bg-red-50 hover:bg-red-100 p-1 rounded-full text-red-600 shadow-3xs cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="cursor-pointer w-full h-full flex flex-col items-center justify-center dialog-file-label">
+                        <span className="text-lg">📱</span>
+                        <span className="text-[10px] font-black text-purple-600 uppercase tracking-tight">VNeID / Thẻ ĐT</span>
+                        <span className="text-[8px] text-slate-400 font-bold mt-0.5 leading-none">Quét thông tin VNeID</span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={(e) => handleOcrUpload(e, 'eid')}
+                          className="hidden"
+                        />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3.5">
                 <div>
                   <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Họ và tên học viên *</label>
@@ -1649,6 +2017,28 @@ export const Students: React.FC<StudentsProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Dynamic zoom-in image preview modal overlay */}
+      {previewImageUrl && (
+        <div 
+          className="fixed inset-0 bg-slate-950/80 z-55 backdrop-blur-xs flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setPreviewImageUrl(null)}
+        >
+          <div className="relative max-w-2xl w-full flex items-center justify-center animate-zoom-in" onClick={(e) => e.stopPropagation()}>
+            <img 
+              src={previewImageUrl} 
+              alt="Preview" 
+              className="max-h-[85vh] max-w-full rounded-2xl shadow-2xl border border-slate-800" 
+            />
+            <button 
+              className="absolute -top-12 right-0 text-white font-black hover:text-slate-200 text-xs bg-slate-900/80 border border-slate-800 rounded-full py-1.5 px-3.5 cursor-pointer flex items-center gap-1.5"
+              onClick={() => setPreviewImageUrl(null)}
+            >
+              <X className="h-4 w-4" /> ĐÓNG
+            </button>
           </div>
         </div>
       )}

@@ -5,14 +5,15 @@
 
 import React, { useState } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
+import { getLocalTodayString, getLocalOffsetString } from '../utils/dateUtils';
 import { Download, Calendar, FileSpreadsheet, TrendingUp, Layers, Users, Star, Fuel, Wrench, BarChart2 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export const Reports: React.FC = () => {
   const { students, payments, lessons, vehicles } = useDatabase();
 
-  const [startDate, setStartDate] = useState('2026-05-01');
-  const [endDate, setEndDate] = useState('2026-06-30');
+  const [startDate, setStartDate] = useState(getLocalOffsetString(-30));
+  const [endDate, setEndDate] = useState(getLocalTodayString());
 
   // Filter students based on registration date
   const filteredStudentsForReport = students.filter(

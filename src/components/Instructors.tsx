@@ -17,7 +17,8 @@ import {
   CreditCard,
   MapPin,
   Clock,
-  Award
+  Award,
+  Edit
 } from 'lucide-react';
 
 export const Instructors: React.FC = () => {
@@ -30,6 +31,7 @@ export const Instructors: React.FC = () => {
   } = useDatabase();
 
   const [isAdding, setIsAdding] = useState(false);
+  const [editingInstructor, setEditingInstructor] = useState<Instructor | null>(null);
 
   // New Instructor States
   const [name, setName] = useState('');
@@ -39,8 +41,22 @@ export const Instructors: React.FC = () => {
   const [selectedClasses, setSelectedClasses] = useState<LicenseClass[]>(['B số tự động', 'B số sàn']);
   const [status, setStatus] = useState<'Đang dạy' | 'Tạm nghỉ' | 'Nghỉ việc'>('Đang dạy');
 
+  // Edit Instructor States
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editCert, setEditCert] = useState('');
+  const [editExperience, setEditExperience] = useState(5);
+  const [editSelectedClasses, setEditSelectedClasses] = useState<LicenseClass[]>([]);
+  const [editStatus, setEditStatus] = useState<'Đang dạy' | 'Tạm nghỉ' | 'Nghỉ việc'>('Đang dạy');
+
   const handleClassToggle = (lc: LicenseClass) => {
     setSelectedClasses(prev =>
+      prev.includes(lc) ? prev.filter(c => c !== lc) : [...prev, lc]
+    );
+  };
+
+  const handleEditClassToggle = (lc: LicenseClass) => {
+    setEditSelectedClasses(prev =>
       prev.includes(lc) ? prev.filter(c => c !== lc) : [...prev, lc]
     );
   };
@@ -66,6 +82,37 @@ export const Instructors: React.FC = () => {
     setPhone('');
     setIsAdding(false);
     alert('Đăng ký Giảng viên mới thành công!');
+  };
+
+  const startEditing = (ins: Instructor) => {
+    setEditingInstructor(ins);
+    setEditName(ins.name);
+    setEditPhone(ins.phone);
+    setEditCert(ins.teachingCertificate || '');
+    setEditExperience(ins.experienceYears || 5);
+    setEditSelectedClasses(ins.vehicleTypes);
+    setEditStatus(ins.status || 'Đang dạy');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingInstructor) return;
+    if (!editName || !editPhone) {
+      alert('Vui lòng điền họ tên và số điện thoại.');
+      return;
+    }
+
+    updateInstructor(editingInstructor.id, {
+      name: editName,
+      phone: editPhone,
+      teachingCertificate: editCert,
+      experienceYears: editExperience,
+      vehicleTypes: editSelectedClasses,
+      status: editStatus
+    });
+
+    setEditingInstructor(null);
+    alert('Đã cập nhật hồ sơ giảng viên thành công!');
   };
 
   const handleChangeStatus = (id: string, newStat: any) => {
@@ -142,7 +189,14 @@ export const Instructors: React.FC = () => {
 
               {/* Status toggles for Admin */}
               {currentUser?.role === 'Admin' && (
-                <div className="pt-3 border-t border-slate-50 flex gap-1.5 justify-end">
+                <div className="pt-3 border-t border-slate-50 flex gap-1.5 justify-between items-center">
+                  <button
+                    type="button"
+                    onClick={() => startEditing(ins)}
+                    className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg text-[10px] p-2 font-bold cursor-pointer transition-all flex items-center gap-1 text-slate-705"
+                  >
+                    <Edit className="h-3 w-3" /> CHỈNH SỬA
+                  </button>
                   <select
                     value={ins.status}
                     onChange={(e) => handleChangeStatus(ins.id, e.target.value as any)}
@@ -158,6 +212,122 @@ export const Instructors: React.FC = () => {
           );
         })}
       </div>
+
+      {/* FORM DIALOG: EDIT INSTRUCTOR */}
+      {editingInstructor && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-zoom-in">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <span className="text-sm font-black text-slate-800 uppercase flex items-center gap-1.5">
+                <Edit className="h-5 w-5 text-blue-600" /> CẬP NHẬT GIẢNG VIÊN
+              </span>
+              <button
+                onClick={() => setEditingInstructor(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="h-5.5 w-5.5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="p-5 space-y-4 text-xs font-bold">
+              <div>
+                <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Họ và tên giảng viên *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Thầy Nguyễn Văn ..."
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Số điện thoại liên hệ *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 0914..."
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-800"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Mã số chứng chỉ SP</label>
+                  <input
+                    type="text"
+                    value={editCert}
+                    onChange={(e) => setEditCert(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-800 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Thâm niên công tác (Năm)</label>
+                  <input
+                    type="number"
+                    value={editExperience}
+                    onChange={(e) => setEditExperience(Number(e.target.value))}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-slate-800"
+                  />
+                </div>
+              </div>
+
+              {/* Checkboxes classes allowed */}
+              <div>
+                <span className="block text-[10px] text-slate-400 uppercase tracking-wider mb-2">Đủ thẩm quyền dạy hạng:</span>
+                <div className="flex flex-wrap gap-2">
+                  {(['A1', 'A', 'B số tự động', 'B số sàn', 'C1'] as LicenseClass[]).map((lc) => {
+                    const active = editSelectedClasses.includes(lc);
+                    return (
+                      <button
+                        key={lc}
+                        type="button"
+                        onClick={() => handleEditClassToggle(lc)}
+                        className={`py-1.5 px-3 rounded-lg border text-[10px] font-black cursor-pointer transition-all ${active ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-slate-50 border-slate-100 text-slate-500'}`}
+                      >
+                        {lc}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Trạng thái giảng dạy</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-slate-800"
+                >
+                  <option value="Đang dạy">Đang hoạt động</option>
+                  <option value="Tạm nghỉ">Phép / Tạm nghỉ</option>
+                  <option value="Nghỉ việc">Đóng / Thôi việc</option>
+                </select>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex gap-2 justify-end text-xs">
+                <button
+                  type="button"
+                  onClick={() => setEditingInstructor(null)}
+                  className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  HỦY BỎ
+                </button>
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl cursor-pointer shadow-sm font-bold"
+                >
+                  ✓ LƯU THAY ĐỔI
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* FORM DIALOG: ADD NEW INSTRUCTOR */}
       {isAdding && (

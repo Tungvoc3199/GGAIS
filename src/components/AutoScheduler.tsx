@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
+import { getLocalTodayString, getLocalOffsetString } from '../utils/dateUtils';
 import { 
   runAdvancedSchedulingEngine, 
   executeSchedulingUnitTests, 
@@ -62,8 +63,8 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
   // Wizard parameters
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [studentExamDates, setStudentExamDates] = useState<Record<string, string>>({}); // studentId -> examdate (yyyy-MM-dd)
-  const [startDate, setStartDate] = useState('2026-06-02');
-  const [endDate, setEndDate] = useState('2026-06-08');
+  const [startDate, setStartDate] = useState(getLocalTodayString());
+  const [endDate, setEndDate] = useState(getLocalOffsetString(7));
   const [duration, setDuration] = useState(120); // minutes
   const [preferredDays, setPreferredDays] = useState<number[]>([1, 2, 3, 4, 5]); // Weekdays (1=Mon ... 7=Sun)
   const [timeWindows, setTimeWindows] = useState<{ start: string; end: string }[]>([

@@ -29,7 +29,8 @@ import {
   TrendingUp,
   Coins,
   Fuel,
-  Activity
+  Activity,
+  Edit
 } from 'lucide-react';
 
 export const Vehicles: React.FC = () => {
@@ -66,6 +67,14 @@ export const Vehicles: React.FC = () => {
   const [editNextOilChangeDate, setEditNextOilChangeDate] = useState<string>('');
   const [editLastMaintenanceDate, setEditLastMaintenanceDate] = useState<string>('');
   const [editMaintenanceNotes, setEditMaintenanceNotes] = useState<string>('');
+
+  // General Vehicle Edit Modal States
+  const [editingVehicleGeneral, setEditingVehicleGeneral] = useState<Vehicle | null>(null);
+  const [editGeneralName, setEditGeneralName] = useState('');
+  const [editGeneralPlate, setEditGeneralPlate] = useState('');
+  const [editGeneralTransmission, setEditGeneralTransmission] = useState<'Số sàn' | 'Số tự động' | 'Khác'>('Số tự động');
+  const [editGeneralLicenseClass, setEditGeneralLicenseClass] = useState<LicenseClass>('B số tự động');
+  const [editGeneralStatus, setEditGeneralStatus] = useState<'Đang hoạt động' | 'Đang bảo dưỡng' | 'Đang hỏng'>('Đang hoạt động');
 
   // Tab selector
   const [activeTab, setActiveTab] = useState<'fleet' | 'expenses'>('fleet');
@@ -238,6 +247,40 @@ export const Vehicles: React.FC = () => {
   const handleUpdateStatus = (id: string, newStat: any) => {
     updateVehicle(id, { status: newStat });
     alert('Đã đồng bộ trạng thái kỹ thuật của xe tập thành công.');
+  };
+
+  const handleOpenEditGeneral = (v: Vehicle) => {
+    setEditingVehicleGeneral(v);
+    setEditGeneralName(v.name);
+    setEditGeneralPlate(v.plate);
+    setEditGeneralTransmission(v.transmission);
+    setEditGeneralLicenseClass(v.suitableLicenseClass);
+    setEditGeneralStatus(v.status);
+  };
+
+  const handleSaveEditGeneral = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingVehicleGeneral) return;
+    if (!editGeneralName || !editGeneralPlate) {
+      alert('Vui lòng điền đầy đủ tên xe và biển số kiểm soát.');
+      return;
+    }
+
+    updateVehicle(editingVehicleGeneral.id, {
+      name: editGeneralName,
+      plate: editGeneralPlate.toUpperCase(),
+      transmission: editGeneralTransmission,
+      suitableLicenseClass: editGeneralLicenseClass,
+      status: editGeneralStatus
+    });
+
+    await addAuditLog(
+      'Sửa thông tin xe',
+      `Thay đổi biển số/tên gọi của xe tập lái từ ${editingVehicleGeneral.name} [${editingVehicleGeneral.plate}] thành ${editGeneralName} [${editGeneralPlate.toUpperCase()}].`
+    );
+
+    setEditingVehicleGeneral(null);
+    alert('Cập nhật thông tin xe tập lái thành công!');
   };
 
   return (
@@ -418,22 +461,29 @@ export const Vehicles: React.FC = () => {
 
                 {/* Status selectors & Delete for admin & staffs */}
                 {currentUser?.role !== 'Instructor' && (
-                  <div className="pt-3 border-t border-slate-105 flex justify-between items-center gap-1.5">
+                  <div className="pt-3 border-t border-slate-105 flex justify-between items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditGeneral(v)}
+                      className="bg-slate-50 hover:bg-slate-100 text-slate-705 border border-slate-200 rounded-xl font-bold text-[10px] uppercase px-2.5 py-1.5 cursor-pointer flex items-center gap-1 transition-all"
+                    >
+                      <Edit className="h-3 w-3" /> Sửa xe
+                    </button>
                     <button
                       type="button"
                       onClick={() => setVehicleToDelete(v)}
-                      className="bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 font-bold transition-all text-[11px] uppercase px-3 py-1.5 rounded-xl cursor-pointer border border-red-100 flex items-center gap-1"
+                      className="bg-red-50 hover:bg-red-100 text-red-650 hover:text-red-700 font-bold transition-all text-[10px] uppercase px-2.5 py-1.5 rounded-xl cursor-pointer border border-red-100 flex items-center gap-1"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Xóa xe
+                      <Trash2 className="h-3 w-3" />
+                      Xóa
                     </button>
                     <select
                       value={v.status}
                       onChange={(e) => handleUpdateStatus(v.id, e.target.value as any)}
-                      className="bg-slate-50 border border-slate-200 text-xs py-1.5 px-2.5 rounded-xl font-bold cursor-pointer text-slate-700"
+                      className="bg-slate-50 border border-slate-200 text-[10px] py-1.5 px-2 rounded-xl font-bold cursor-pointer text-slate-750"
                     >
                       <option value="Đang hoạt động">✓ Hoạt động</option>
-                      <option value="Đang bảo dưỡng">🔧 Bảo dưỡng</option>
+                      <option value="Đang bảo dưỡng">🔧 B.Dưỡng</option>
                       <option value="Đang hỏng">❌ Hỏng hóc</option>
                     </select>
                   </div>
@@ -683,6 +733,110 @@ export const Vehicles: React.FC = () => {
           </div>
         );
       })()}
+
+      {/* VEHICLE GENERAL DETAILS EDIT MODAL */}
+      {editingVehicleGeneral && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-xl overflow-hidden animate-zoom-in">
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <span className="text-sm font-black text-slate-800 uppercase flex items-center gap-1.5">
+                <Edit className="h-5 w-5 text-blue-600" /> CẬP NHẬT THÔNG TIN XE
+              </span>
+              <button
+                onClick={() => setEditingVehicleGeneral(null)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="h-5.5 w-5.5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditGeneral} className="p-5 space-y-4 text-xs font-bold font-sans">
+              <div>
+                <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Tên dòng xe & Model *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Toyota Vios 2024"
+                  value={editGeneralName}
+                  onChange={(e) => setEditGeneralName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Biển kiểm soát (BKS) *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. 29A-123.45"
+                  value={editGeneralPlate}
+                  onChange={(e) => setEditGeneralPlate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-800 font-mono text-sm uppercase"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-[10px] text-slate-550 uppercase mb-1.5">Cơ cấu hộp số</label>
+                  <select
+                    value={editGeneralTransmission}
+                    onChange={(e) => setEditGeneralTransmission(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-slate-800 text-xs font-bold"
+                  >
+                    <option value="Số tự động">Số tự động (AT)</option>
+                    <option value="Số sàn">Số sàn (MT)</option>
+                    <option value="Khác">Phần Khác</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] text-slate-550 uppercase mb-1.5">Dạy phù hợp Hạng</label>
+                  <select
+                    value={editGeneralLicenseClass}
+                    onChange={(e) => setEditGeneralLicenseClass(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-slate-805 text-xs"
+                  >
+                    <option value="A1">Hạng bằng A1</option>
+                    <option value="A">Hạng bằng A</option>
+                    <option value="B số tự động">Hạng bằng B Tự Động</option>
+                    <option value="B số sàn">Hạng bằng B Số Sàn</option>
+                    <option value="C1">Hạng bằng C1 (Xe Tải)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] text-slate-550 uppercase mb-1.5">Trạng thái kỹ thuật</label>
+                <select
+                  value={editGeneralStatus}
+                  onChange={(e) => setEditGeneralStatus(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-slate-805 text-xs font-bold text-slate-700"
+                >
+                  <option value="Đang hoạt động">✓ Hoạt động bình thường</option>
+                  <option value="Đang bảo dưỡng">🔧 Đang bảo dưỡng</option>
+                  <option value="Đang hỏng">❌ Đang hỏng sửa</option>
+                </select>
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex gap-2 justify-end text-xs">
+                <button
+                  type="button"
+                  onClick={() => setEditingVehicleGeneral(null)}
+                  className="bg-slate-100 text-slate-700 hover:bg-slate-200 px-4 py-2.5 rounded-xl cursor-pointer"
+                >
+                  HỦY BỎ
+                </button>
+                <button
+                  type="submit"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl cursor-pointer shadow-sm font-bold"
+                >
+                  ✓ LƯU THAY ĐỔI
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {isAdding && (
         <div className="fixed inset-0 bg-slate-900/60 z-50 backdrop-blur-xs flex items-center justify-center p-4">

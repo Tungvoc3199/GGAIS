@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
-import { Settings as SettingsIcon, ShieldCheck, Sliders, DollarSign, Calendar, RefreshCcw, Database, Download, Sun, Moon } from 'lucide-react';
+import { Settings as SettingsIcon, ShieldCheck, Sliders, DollarSign, Calendar, RefreshCcw, Database, Download, Sun, Moon, Check } from 'lucide-react';
 
 export const Settings: React.FC = () => {
   const {
@@ -22,6 +22,7 @@ export const Settings: React.FC = () => {
   } = useDatabase();
 
   const [backupStatus, setBackupStatus] = useState<string | null>(null);
+  const [saveIndicator, setSaveIndicator] = useState<'saving' | 'saved' | null>(null);
 
   // Local settings clone
   const [schoolName, setSchoolName] = useState(settings.schoolName);
@@ -34,6 +35,48 @@ export const Settings: React.FC = () => {
   const [workingEnd, setWorkingEnd] = useState(settings.autoSchedulingRules.workingHourEnd);
   const [buffer, setBuffer] = useState(settings.autoSchedulingRules.safetyBufferMinutes);
   const [theme, setTheme] = useState<'light' | 'dark'>(settings.theme || 'light');
+
+  // Load backend configurations into inputs when they arrive asynchronously
+  useEffect(() => {
+    if (settings) {
+      setSchoolName(settings.schoolName);
+      setTuitionA1(settings.tuitionPrices.A1);
+      setTuitionBAuto(settings.tuitionPrices['B số tự động']);
+      setTuitionBManual(settings.tuitionPrices['B số sàn']);
+      setTuitionC1(settings.tuitionPrices.C1);
+      setWorkingStart(settings.autoSchedulingRules.workingHourStart);
+      setWorkingEnd(settings.autoSchedulingRules.workingHourEnd);
+      setBuffer(settings.autoSchedulingRules.safetyBufferMinutes);
+      setTheme(settings.theme || 'light');
+    }
+  }, [settings]);
+
+  // Centralized debounced/instant AutoSave handler
+  const triggerAutoSave = (updatedFields: Partial<typeof settings>) => {
+    setSaveIndicator('saving');
+
+    const merged = {
+      ...settings,
+      ...updatedFields,
+      tuitionPrices: {
+        ...settings.tuitionPrices,
+        ...(updatedFields.tuitionPrices || {})
+      },
+      autoSchedulingRules: {
+        ...settings.autoSchedulingRules,
+        ...(updatedFields.autoSchedulingRules || {})
+      }
+    };
+
+    try {
+      updateSettings(merged);
+      setSaveIndicator('saved');
+      setTimeout(() => setSaveIndicator(null), 3000);
+    } catch (e) {
+      console.error('Lỗi lưu tự động:', e);
+      setSaveIndicator(null);
+    }
+  };
 
   const handleBackupDatabase = () => {
     try {
@@ -84,16 +127,11 @@ export const Settings: React.FC = () => {
 
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser?.role !== 'Admin') {
-      alert('Chỉ tài khoản quản trị viên tối cao (Admin) mới có quyền ghi đè cấu hình trung tâm.');
-      return;
-    }
-
-    updateSettings({
+    triggerAutoSave({
       schoolName,
       tuitionPrices: {
         A1: tuitionA1,
-        A: tuitionA1, // match
+        A: tuitionA1,
         'B số tự động': tuitionBAuto,
         'B số sàn': tuitionBManual,
         C1: tuitionC1
@@ -106,7 +144,6 @@ export const Settings: React.FC = () => {
       },
       theme
     });
-
     alert('Đã cập nhật thay đổi cấu hình trường học thành công!');
   };
 
@@ -119,15 +156,38 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const isEditable = currentUser?.role === 'Admin';
+
   return (
     <div className="font-sans py-4 px-2 max-w-4xl mx-auto space-y-6">
       
       {/* Header section */}
-      <div>
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">CÀI ĐẶT HỆ THỐNG</h1>
-        <p className="text-xs font-semibold text-slate-400 mt-1 uppercase tracking-wider">
-          Phân bổ bảng giá học phí theo hạng bằng và thiết lập giới hạn thuật toán xếp ca
-        </p>
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">CÀI ĐẶT HỆ THỐNG</h1>
+          <p className="text-xs font-semibold text-slate-400 mt-1 uppercase tracking-wider">
+            Phân bổ bảng giá học phí theo hạng bằng và thiết lập giới hạn thuật toán xếp ca
+          </p>
+        </div>
+        
+        {/* Real-time sync / save indicator */}
+        <div className="shrink-0">
+          {saveIndicator === 'saving' && (
+            <span className="bg-amber-50 text-amber-700 text-[11px] font-black px-3 py-2 rounded-2xl border border-amber-200 uppercase tracking-wider flex items-center gap-1.5 animate-pulse">
+              <span className="h-2 w-2 rounded-full bg-amber-500"></span> Đang tự động lưu...
+            </span>
+          )}
+          {saveIndicator === 'saved' && (
+            <span className="bg-emerald-50 text-emerald-700 text-[11px] font-black px-3 py-2 rounded-2xl border border-emerald-200 uppercase tracking-wider flex items-center gap-1.5 animate-zoom-in">
+              <Check className="h-3.5 w-3.5" /> Đã tự động lưu xong!
+            </span>
+          )}
+          {!saveIndicator && (
+            <span className="bg-indigo-50 text-indigo-700 text-[11px] font-black px-3 py-2 rounded-2xl border border-indigo-150 uppercase tracking-wider flex items-center gap-1.5">
+              💡 Toàn bộ các ô Sửa tự động lưu
+            </span>
+          )}
+        </div>
       </div>
 
       <form onSubmit={handleSaveSettings} className="space-y-5 text-xs font-bold font-sans">
@@ -144,9 +204,11 @@ export const Settings: React.FC = () => {
               <input
                 type="text"
                 required
+                disabled={!isEditable}
                 value={schoolName}
                 onChange={(e) => setSchoolName(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-xs font-bold text-slate-800"
+                onBlur={() => isEditable && triggerAutoSave({ schoolName })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-xs font-bold text-slate-800 disabled:opacity-70"
               />
             </div>
 
@@ -155,7 +217,10 @@ export const Settings: React.FC = () => {
               <div className="flex gap-2.5">
                 <button
                   type="button"
-                  onClick={() => setTheme('light')}
+                  onClick={() => {
+                    setTheme('light');
+                    triggerAutoSave({ theme: 'light' });
+                  }}
                   className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-black transition-all border flex items-center justify-center gap-2 cursor-pointer select-none ${
                     theme === 'light'
                       ? 'bg-blue-600 border-blue-600 text-white shadow-sm'
@@ -167,7 +232,10 @@ export const Settings: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTheme('dark')}
+                  onClick={() => {
+                    setTheme('dark');
+                    triggerAutoSave({ theme: 'dark' });
+                  }}
                   className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-black transition-all border flex items-center justify-center gap-2 cursor-pointer select-none ${
                     theme === 'dark'
                       ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
@@ -193,9 +261,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Học phí lý thuyết Hạng A1</label>
               <input
                 type="number"
+                disabled={!isEditable}
                 value={tuitionA1}
                 onChange={(e) => setTuitionA1(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ tuitionPrices: { ...settings.tuitionPrices, A1: tuitionA1, A: tuitionA1 } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
 
@@ -203,9 +273,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Trọn gói thi hạng B (Tự động - B1)</label>
               <input
                 type="number"
+                disabled={!isEditable}
                 value={tuitionBAuto}
                 onChange={(e) => setTuitionBAuto(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ tuitionPrices: { ...settings.tuitionPrices, 'B số tự động': tuitionBAuto } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
 
@@ -213,9 +285,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Trọn gói thi hạng B (Số sàn - B2)</label>
               <input
                 type="number"
+                disabled={!isEditable}
                 value={tuitionBManual}
                 onChange={(e) => setTuitionBManual(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ tuitionPrices: { ...settings.tuitionPrices, 'B số sàn': tuitionBManual } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
 
@@ -223,9 +297,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Trọn gói xe tải Hạng C</label>
               <input
                 type="number"
+                disabled={!isEditable}
                 value={tuitionC1}
                 onChange={(e) => setTuitionC1(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ tuitionPrices: { ...settings.tuitionPrices, C1: tuitionC1 } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
           </div>
@@ -242,9 +318,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Giờ mở cửa bãi tập</label>
               <input
                 type="time"
+                disabled={!isEditable}
                 value={workingStart}
                 onChange={(e) => setWorkingStart(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ autoSchedulingRules: { ...settings.autoSchedulingRules, workingHourStart: workingStart } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
 
@@ -252,9 +330,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Giờ đóng cửa bãi tập</label>
               <input
                 type="time"
+                disabled={!isEditable}
                 value={workingEnd}
                 onChange={(e) => setWorkingEnd(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono"
+                onBlur={() => isEditable && triggerAutoSave({ autoSchedulingRules: { ...settings.autoSchedulingRules, workingHourEnd: workingEnd } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-805 font-mono disabled:opacity-75"
               />
             </div>
 
@@ -262,9 +342,11 @@ export const Settings: React.FC = () => {
               <label className="block text-[10px] text-slate-500 uppercase mb-1.5">Khoảng đệm an toàn (Phút)</label>
               <input
                 type="number"
+                disabled={!isEditable}
                 value={buffer}
                 onChange={(e) => setBuffer(Number(e.target.value))}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-850"
+                onBlur={() => isEditable && triggerAutoSave({ autoSchedulingRules: { ...settings.autoSchedulingRules, safetyBufferMinutes: buffer } })}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-slate-850 disabled:opacity-75"
               />
             </div>
           </div>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
 import { Lesson, Instructor, Vehicle, Student, LessonType, LessonStatus, AttendanceStatus } from '../types';
 import { checkLessonConflicts, suggestAvailableSlots } from '../services/scheduling';
@@ -32,7 +32,12 @@ import {
   Printer
 } from 'lucide-react';
 
-export const Schedule: React.FC = () => {
+interface ScheduleProps {
+  quickFormOpen?: boolean;
+  onCloseQuickForm?: () => void;
+}
+
+export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickForm }) => {
   const {
     currentUser,
     lessons,
@@ -94,6 +99,15 @@ export const Schedule: React.FC = () => {
   const [newNoteText, setNewNoteText] = useState('');
   const [notesSuccess, setNotesSuccess] = useState('');
   const [overrideReason, setOverrideReason] = useState('');
+
+  useEffect(() => {
+    if (quickFormOpen) {
+      setIsBooking(true);
+      if (onCloseQuickForm) {
+        onCloseQuickForm();
+      }
+    }
+  }, [quickFormOpen, onCloseQuickForm]);
 
   const renderLessonCard = (les: Lesson) => {
     const student = students.find(s => s.id === les.studentId);
@@ -446,19 +460,24 @@ export const Schedule: React.FC = () => {
 
     // Verify overlays/conflicts unless they approved override
     if (!isOverride) {
-      const check = checkLessonConflicts(payload, lessons, instructors, vehicles);
+      const check = checkLessonConflicts(payload, lessons, instructors, vehicles, settings, students);
       if (check.hasConflict) {
         setConflictWarning(check.reasons);
         setShowOverride(true);
 
-        // Fetch Sugested Slots
+        // Fetch Suggested Slots based on actual duration calculated from formStart and formEnd
+        const startMin = formStart.split(':').map(Number);
+        const endMin = formEnd.split(':').map(Number);
+        const calculatedDuration = (endMin[0] * 60 + endMin[1]) - (startMin[0] * 60 + startMin[1]);
+        const finalDuration = calculatedDuration > 0 ? calculatedDuration : 120;
+
         const options = suggestAvailableSlots(
           {
             studentId: formStudentId,
             instructorId: formInstructorId,
             vehicleId: formVehicleId,
             date: formDate,
-            duration: 120 // minutes
+            duration: finalDuration // minutes
           },
           lessons,
           instructors,
@@ -490,7 +509,9 @@ export const Schedule: React.FC = () => {
         { ...les, date: dateStr },
         lessons,
         instructors,
-        vehicles
+        vehicles,
+        settings,
+        students
       );
       if (check.hasConflict) {
         alert(`Không thể dời lịch tự động: ${check.reasons.join(', ')}`);

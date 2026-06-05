@@ -29,12 +29,20 @@ export const Auth: React.FC = () => {
       badgeColor: 'bg-amber-100 text-amber-800 border-amber-200'
     },
     {
+      role: 'Accountant' as UserRole,
+      email: 'lan.accounting@lichhocpro.vn',
+      desc: 'Quản lý thu chi học viên, thực hiện các báo cáo tài chính.',
+      badgeColor: 'bg-violet-100 text-violet-800 border-violet-200'
+    },
+    {
       role: 'Instructor' as UserRole,
       email: 'hung.nv@lichhocpro.vn',
       desc: 'Xem lịch phân công riêng, cập nhật ghi chú chất lượng buổi tập.',
       badgeColor: 'bg-emerald-100 text-emerald-800 border-emerald-200'
     }
   ];
+
+  const showToggle = (import.meta as any).env.DEV || (import.meta as any).env.VITE_ENABLE_DEMO_MODE === 'true';
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,39 +131,41 @@ export const Auth: React.FC = () => {
           Chuyên nghiệp hóa quản lý lịch trình giảng dạy và sổ thu chi trường lái
         </p>
 
-        {/* Quick Config Database Mode Toggle */}
-        <div className="mt-4 flex justify-center">
-          <div className="inline-flex rounded-2xl bg-slate-200/50 p-1 border border-slate-200">
-            <button
-              type="button"
-              onClick={() => {
-                toggleDatabaseMode(false);
-                setError('');
-              }}
-              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                isFirebase 
-                  ? 'bg-white text-blue-700 shadow-sm border border-slate-100' 
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              ☁️ Cloud (Firebase)
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                toggleDatabaseMode(true);
-                setError('');
-              }}
-              className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                !isFirebase 
-                  ? 'bg-white text-amber-700 shadow-sm border border-slate-100' 
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
-            >
-              💾 Simulation (Local)
-            </button>
+        {/* Quick Config Database Mode Toggle (Visible only in DEV/Demo environments) */}
+        {showToggle && (
+          <div className="mt-4 flex justify-center">
+            <div className="inline-flex rounded-2xl bg-slate-200/50 p-1 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => {
+                  toggleDatabaseMode(false);
+                  setError('');
+                }}
+                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  isFirebase 
+                    ? 'bg-white text-blue-700 shadow-sm border border-slate-100' 
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                ☁️ Cloud (Firebase)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  toggleDatabaseMode(true);
+                  setError('');
+                }}
+                className={`px-4 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  !isFirebase 
+                    ? 'bg-white text-amber-700 shadow-sm border border-slate-100' 
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                💾 Simulation (Local)
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
@@ -226,42 +236,44 @@ export const Auth: React.FC = () => {
             </button>
           </form>
 
-          <div className="mt-8">
-            <div className="relative flex items-center justify-center mb-6">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-slate-100"></div>
+          {showToggle && (
+            <div className="mt-8">
+              <div className="relative flex items-center justify-center mb-6">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-slate-100"></div>
+                </div>
+                <span className="relative px-3 bg-white text-xs font-bold uppercase tracking-widest text-slate-400">
+                  Đăng nhập nhanh Demo
+                </span>
               </div>
-              <span className="relative px-3 bg-white text-xs font-bold uppercase tracking-widest text-slate-400">
-                Đăng nhập nhanh Demo
-              </span>
-            </div>
 
-            <div className="space-y-3">
-              {demoAccounts.map((acc) => (
-                <button
-                  key={acc.role}
-                  type="button"
-                  onClick={() => handleQuickLogin(acc.email, acc.role)}
-                  className="w-full text-left p-3.5 rounded-2xl border border-slate-100 hover:border-blue-200 hover:bg-blue-50/10 active:bg-blue-50/20 transition-all cursor-pointer flex flex-col gap-1 group"
-                >
-                  <div className="flex justify-between items-center w-full">
-                    <span className="text-sm font-bold text-slate-800 group-hover:text-blue-600 transition-colors">
-                      {acc.role === 'Admin' ? '👤 Quản Trị Viên (Admin)' : acc.role === 'Staff' ? '💼 Giáo Vụ/Tuyển Sinh (Staff)' : '🚗 Giảng Viên Dạy Lái (Instructor)'}
+              <div className="space-y-3">
+                {demoAccounts.map((acc) => (
+                  <button
+                    key={acc.role}
+                    type="button"
+                    onClick={() => handleQuickLogin(acc.email, acc.role)}
+                    className="w-full text-left p-3.5 rounded-2xl border border-slate-100 hover:border-blue-200 hover:bg-blue-50/10 active:bg-blue-50/20 transition-all cursor-pointer flex flex-col gap-1 group w-full"
+                  >
+                    <div className="flex justify-between items-center w-full">
+                      <span className="text-sm font-bold text-slate-800 group-hover:text-blue-600 transition-colors">
+                        {acc.role === 'Admin' ? '👤 Quản Trị Viên (Admin)' : acc.role === 'Staff' ? '💼 Giáo Vụ/Tuyển Sinh (Staff)' : acc.role === 'Accountant' ? '💰 Kế Toán Trọng Điểm (Accountant)' : '🚗 Giảng Viên Dạy Lái (Instructor)'}
+                      </span>
+                      <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${acc.badgeColor}`}>
+                        {acc.role}
+                      </span>
+                    </div>
+                    <span className="text-xs text-slate-400 group-hover:text-slate-500 transition-colors">
+                      Email: {acc.email}
                     </span>
-                    <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded-full border ${acc.badgeColor}`}>
-                      {acc.role}
+                    <span className="text-[11px] leading-relaxed text-slate-500 mt-0.5">
+                      {acc.desc}
                     </span>
-                  </div>
-                  <span className="text-xs text-slate-400 group-hover:text-slate-500 transition-colors">
-                    Email: {acc.email}
-                  </span>
-                  <span className="text-[11px] leading-relaxed text-slate-500 mt-0.5">
-                    {acc.desc}
-                  </span>
-                </button>
-              ))}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

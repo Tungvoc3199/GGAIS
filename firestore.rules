@@ -1,0 +1,246 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Catch-All Deny Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Core Helper Functions ---
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Role Lookup from trusted Document (No client claims)
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'Admin';
+    }
+
+    function isStaff() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'Staff';
+    }
+
+    function isInstructor() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'Instructor';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Schema and structural validators
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role']) 
+        && data.keys().size() == 4
+        && data.uid is string && data.uid.size() <= 128
+        && data.email is string && data.email.size() <= 128
+        && data.displayName is string && data.displayName.size() <= 128
+        && data.role in ['Admin', 'Instructor', 'Staff'];
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'code', 'name', 'phone', 'dob', 'address', 'licenseClass', 'courseType', 'registrationDate', 'totalFee', 'paidAmount', 'remainingAmount', 'nextPaymentDeadline', 'status', 'totalSessions', 'completedSessions', 'remainingSessions', 'assignedInstructorId', 'assignedVehicleId', 'notes', 'reminderStatus'])
+        && data.id is string
+        && data.code is string
+        && data.name is string && data.name.size() <= 128
+        && data.phone is string && data.phone.size() <= 32
+        && data.dob is string
+        && data.address is string
+        && data.licenseClass is string
+        && data.courseType is string
+        && data.totalFee is number
+        && data.paidAmount is number
+        && data.remainingAmount is number
+        && data.status is string
+        && data.totalSessions is number
+        && data.completedSessions is number
+        && data.remainingSessions is number
+        && (!data.keys().hasAny(['tags']) || data.tags is list);
+    }
+
+    function isValidInstructor(data) {
+      return data.keys().hasAll(['id', 'name', 'phone', 'vehicleTypes', 'workingDays', 'workingHours', 'daysOff', 'active', 'notes'])
+        && data.id is string
+        && data.name is string
+        && data.phone is string
+        && data.vehicleTypes is list
+        && data.workingDays is list
+        && data.workingHours is map
+        && data.workingHours.start is string
+        && data.workingHours.end is string
+        && data.daysOff is list
+        && data.active is bool;
+    }
+
+    function isValidVehicle(data) {
+      return data.keys().hasAll(['id', 'name', 'plate', 'transmission', 'category', 'status', 'notes'])
+        && data.id is string
+        && data.name is string
+        && data.plate is string
+        && data.transmission in ['Số tự động', 'Số sàn']
+        && data.category is string
+        && data.status is string;
+    }
+
+    function isValidLesson(data) {
+      return data.keys().hasAll(['id', 'studentId', 'instructorId', 'vehicleId', 'date', 'startTime', 'endTime', 'lessonType', 'pickupLocation', 'trainingLocation', 'notes', 'status', 'attendanceStatus', 'resultNote'])
+        && data.id is string
+        && data.studentId is string
+        && data.instructorId is string
+        && data.vehicleId is string
+        && data.date is string
+        && data.startTime is string
+        && data.endTime is string
+        && data.lessonType is string
+        && data.status is string
+        && data.attendanceStatus is string;
+    }
+
+    function isValidPayment(data) {
+      return data.keys().hasAll(['id', 'studentId', 'paymentDate', 'amount', 'method', 'category', 'receiver', 'notes', 'isCancelled', 'createdAt', 'createdBy'])
+        && data.id is string
+        && data.studentId is string
+        && data.paymentDate is string
+        && data.amount is number
+        && data.method is string
+        && data.category is string
+        && data.receiver is string
+        && data.isCancelled is bool
+        && data.createdAt is string
+        && data.createdBy is string;
+    }
+
+    function isValidAvailability(data) {
+      return data.keys().hasAll(['instructorId', 'date', 'available', 'notes'])
+        && data.instructorId is string
+        && data.date is string
+        && data.available is bool;
+    }
+
+    function isValidReminder(data) {
+      return data.keys().hasAll(['id', 'studentId', 'type', 'status', 'message', 'createdAt'])
+        && data.id is string
+        && data.studentId is string
+        && data.type is string
+        && data.status is string
+        && data.message is string
+        && data.createdAt is string;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['id', 'timestamp', 'action', 'details', 'userId', 'userName', 'userRole'])
+        && data.id is string
+        && data.timestamp is string
+        && data.action is string
+        && data.details is string
+        && data.userId is string
+        && data.userName is string
+        && data.userRole is string;
+    }
+
+    // --- Collections Configurations ---
+
+    // 1. Users Profile Collection
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (isOwner(userId) || isAdmin());
+      allow update: if isSignedIn() && isValidId(userId) && isValidUser(incoming()) && (
+        isAdmin() || 
+        (isOwner(userId) && incoming().role == existing().role) // Block self-privilege escalation
+      );
+      allow delete: if isAdmin();
+    }
+
+    // 2. Students Collection
+    match /students/{studentId} {
+      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow create: if (isAdmin() || isStaff()) && isValidId(studentId) && isValidStudent(incoming());
+      allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(studentId) && isValidStudent(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 3. Instructors Collection
+    match /instructors/{instructorId} {
+      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow create: if (isAdmin() || isStaff()) && isValidId(instructorId) && isValidInstructor(incoming());
+      allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(instructorId) && isValidInstructor(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 4. Vehicles Collection
+    match /vehicles/{vehicleId} {
+      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow create: if (isAdmin() || isStaff()) && isValidId(vehicleId) && isValidVehicle(incoming());
+      allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(vehicleId) && isValidVehicle(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 5. Lessons Collection
+    match /lessons/{lessonId} {
+      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow create: if (isAdmin() || isStaff() || isInstructor()) && isValidId(lessonId) && isValidLesson(incoming()) && (
+        exists(/databases/$(database)/documents/students/$(incoming().studentId)) &&
+        exists(/databases/$(database)/documents/instructors/$(incoming().instructorId)) &&
+        exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId))
+      );
+      allow update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(lessonId) && isValidLesson(incoming());
+      allow delete: if (isAdmin() || isStaff()); // Block instructors from hard deleting lessons
+    }
+
+    // 6. Payments Collection (Ledger Hardening - NO DELETE)
+    match /payments/{paymentId} {
+      allow read: if isAdmin() || isStaff();
+      allow create: if (isAdmin() || isStaff()) && isValidId(paymentId) && isValidPayment(incoming()) && (
+        exists(/databases/$(database)/documents/students/$(incoming().studentId))
+      );
+      allow update: if isAdmin() && isValidId(paymentId) && isValidPayment(incoming()); // Only Admin can update/cancel payment records
+      allow delete: if false; // STRICT RESTRICTION: No soft or hard deletions of payments from user client
+    }
+
+    // 7. Availability Overrides
+    match /availability/{availabilityId} {
+      allow read: if isAdmin() || isStaff() || isInstructor();
+      allow create, update: if (isAdmin() || isStaff() || isInstructor()) && isValidId(availabilityId) && isValidAvailability(incoming());
+      allow delete: if isAdmin() || isInstructor();
+    }
+
+    // 8. Reminders Collection
+    match /reminders/{reminderId} {
+      allow read: if isAdmin() || isStaff();
+      allow create, update: if (isAdmin() || isStaff()) && isValidId(reminderId) && isValidReminder(incoming());
+      allow delete: if isAdmin();
+    }
+
+    // 9. Audit Logs (Append-Only)
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming());
+      allow update, delete: if false; // Append-only system logging
+    }
+
+    // 10. Global App Settings
+    match /settings/{settingsId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() && isValidId(settingsId);
+      allow delete: if false;
+    }
+  }
+}

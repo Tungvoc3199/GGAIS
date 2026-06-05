@@ -1,0 +1,226 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with system roles",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["Admin", "Instructor", "Staff"] }
+      },
+      "required": ["uid", "email", "displayName", "role"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Information of a student enrolled in the driving school",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "dob": { "type": "string" },
+        "address": { "type": "string" },
+        "licenseClass": { "type": "string" },
+        "courseType": { "type": "string" },
+        "registrationDate": { "type": "string" },
+        "totalFee": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "nextPaymentDeadline": { "type": "string" },
+        "status": { "type": "string" },
+        "totalSessions": { "type": "number" },
+        "completedSessions": { "type": "number" },
+        "remainingSessions": { "type": "number" },
+        "assignedInstructorId": { "type": "string" },
+        "assignedVehicleId": { "type": "string" },
+        "notes": { "type": "string" },
+        "reminderStatus": { "type": "string" },
+        "tags": { "type": "array" }
+      },
+      "required": ["id", "code", "name", "phone", "dob", "address", "licenseClass", "courseType", "registrationDate", "totalFee", "paidAmount", "remainingAmount", "nextPaymentDeadline", "status", "totalSessions", "completedSessions", "remainingSessions", "assignedInstructorId", "assignedVehicleId", "notes", "reminderStatus"]
+    },
+    "Instructor": {
+      "title": "Instructor",
+      "description": "Driving instructor detailing credentials and operational hours",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "vehicleTypes": { "type": "array" },
+        "workingDays": { "type": "array" },
+        "workingHours": { "type": "object" },
+        "daysOff": { "type": "array" },
+        "active": { "type": "boolean" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "name", "phone", "vehicleTypes", "workingDays", "workingHours", "daysOff", "active", "notes"]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Training vehicle information and current state",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "plate": { "type": "string" },
+        "transmission": { "type": "string", "enum": ["Số tự động", "Số sàn"] },
+        "category": { "type": "string" },
+        "status": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "name", "plate", "transmission", "category", "status", "notes"]
+    },
+    "Lesson": {
+      "title": "Lesson",
+      "description": "Scheduling session for driving practice or theoretical training",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "instructorId": { "type": "string" },
+        "vehicleId": { "type": "string" },
+        "date": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "lessonType": { "type": "string" },
+        "pickupLocation": { "type": "string" },
+        "trainingLocation": { "type": "string" },
+        "notes": { "type": "string" },
+        "status": { "type": "string" },
+        "attendanceStatus": { "type": "string" },
+        "resultNote": { "type": "string" }
+      },
+      "required": ["id", "studentId", "instructorId", "vehicleId", "date", "startTime", "endTime", "lessonType", "pickupLocation", "trainingLocation", "notes", "status", "attendanceStatus", "resultNote"]
+    },
+    "Payment": {
+      "title": "Payment",
+      "description": "Tuition fees invoice receipt",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "paymentDate": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string" },
+        "category": { "type": "string" },
+        "receiver": { "type": "string" },
+        "notes": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "isCancelled": { "type": "boolean" },
+        "cancellationReason": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["id", "studentId", "paymentDate", "amount", "method", "category", "receiver", "notes", "isCancelled", "createdAt", "createdBy"]
+    },
+    "Availability": {
+      "title": "Availability",
+      "description": "Special overrides for instructor availability calendar blockouts",
+      "type": "object",
+      "properties": {
+        "instructorId": { "type": "string" },
+        "date": { "type": "string" },
+        "available": { "type": "boolean" },
+        "notes": { "type": "string" }
+      },
+      "required": ["instructorId", "date", "available"]
+    },
+    "Reminder": {
+      "title": "Reminder",
+      "description": "History of notifications sent or scheduled for outstanding balances",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "type": { "type": "string" },
+        "status": { "type": "string" },
+        "message": { "type": "string" },
+        "dateSent": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "studentId", "type", "status", "message", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Security logs capturing operations performed across the systems",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "action": { "type": "string" },
+        "details": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userRole": { "type": "string" }
+      },
+      "required": ["id", "timestamp", "action", "details", "userId", "userName", "userRole"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Central system parameters and driving fees configuration",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string" },
+        "logoPlaceholder": { "type": "string" },
+        "defaultLessonDuration": { "type": "number" },
+        "workingHours": { "type": "object" },
+        "allowedDurations": { "type": "array" },
+        "tuitionReminderThreshold": { "type": "number" },
+        "daysWithoutLessonsWarning": { "type": "number" },
+        "courseTypes": { "type": "array" },
+        "lessonTypes": { "type": "array" },
+        "paymentCategories": { "type": "array" },
+        "timezone": { "type": "string" },
+        "tuitionPrices": { "type": "object" },
+        "autoSchedulingRules": { "type": "object" }
+      },
+      "required": ["schoolName", "logoPlaceholder", "defaultLessonDuration", "workingHours", "allowedDurations", "tuitionReminderThreshold", "daysWithoutLessonsWarning", "courseTypes", "lessonTypes", "paymentCategories", "timezone", "tuitionPrices", "autoSchedulingRules"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Collection storing specific user profiles mapped by their Firebase Auth UIDs."
+    },
+    "/students/{studentId}": {
+      "schema": "Student",
+      "description": "Main students registry storing enrollment details and financials."
+    },
+    "/instructors/{instructorId}": {
+      "schema": "Instructor",
+      "description": "Main instructors registry storing rosters, scheduling norms, and availability keys."
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": "Vehicle",
+      "description": "Active training vehicles catalog representing mechanical properties and deployment status."
+    },
+    "/lessons/{lessonId}": {
+      "schema": "Lesson",
+      "description": "Lesson bookings capturing timeslots, assignments, attendance, and feedback metrics."
+    },
+    "/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Billing ledgers tracking tuition deposits, categories, and transaction details."
+    },
+    "/availability/{availabilityId}": {
+      "schema": "Availability",
+      "description": "Scheduling overrides block and release hours per instructor."
+    },
+    "/reminders/{reminderId}": {
+      "schema": "Reminder",
+      "description": "Payment and course notifications journal."
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Security audit logs recording critical UI triggers and administrative decisions."
+    },
+    "/settings/{settingsId}": {
+      "schema": "AppSettings",
+      "description": "Global school name, default tuition price schedules, and business limits config."
+    }
+  }
+}

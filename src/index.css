@@ -1,0 +1,247 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;550;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Animations slide in right-to-left drawer */
+@keyframes slide-left {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes zoom-in {
+  from {
+    transform: scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-slide-left {
+  animation: slide-left 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-zoom-in {
+  animation: zoom-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ==========================================
+   ELEGANT PREMIUM DARK THEME OVERRIDES
+   ========================================== */
+.dark-theme {
+  --bg-main: #090d16;
+  --bg-card: #111827;
+  --bg-hover: #1f2937;
+  --border-subtle: #1f2937;
+  --border-strong: #374151;
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  background-color: var(--bg-main) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Background Color Overrides */
+.dark-theme .bg-white {
+  background-color: var(--bg-card) !important;
+}
+
+.dark-theme .bg-slate-50 {
+  background-color: #111827 !important;
+}
+
+.dark-theme .bg-slate-100 {
+  background-color: #1f2937 !important;
+}
+
+.dark-theme .bg-slate-150 {
+  background-color: #1f2937 !important;
+}
+
+.dark-theme .bg-slate-200 {
+  background-color: #374151 !important;
+}
+
+.dark-theme .bg-slate-250 {
+  background-color: #4b5563 !important;
+}
+
+.dark-theme .bg-gray-50 {
+  background-color: #111827 !important;
+}
+
+.dark-theme .bg-gray-100 {
+  background-color: #1f2937 !important;
+}
+
+.dark-theme .bg-blue-50\/50,
+.dark-theme .bg-slate-50\/50 {
+  background-color: rgba(17, 24, 39, 0.6) !important;
+}
+
+.dark-theme .bg-blue-50 {
+  background-color: rgba(30, 58, 138, 0.3) !important;
+}
+
+.dark-theme .bg-indigo-50 {
+  background-color: rgba(49, 46, 129, 0.3) !important;
+}
+
+.dark-theme .bg-orange-50 {
+  background-color: rgba(124, 45, 18, 0.3) !important;
+}
+
+.dark-theme .bg-amber-50 {
+  background-color: rgba(120, 53, 4, 0.3) !important;
+}
+
+.dark-theme .bg-emerald-50 {
+  background-color: rgba(6, 78, 59, 0.3) !important;
+}
+
+.dark-theme .bg-rose-50 {
+  background-color: rgba(136, 19, 55, 0.3) !important;
+}
+
+/* Border Color Overrides */
+.dark-theme .border-slate-50 {
+  border-color: var(--border-subtle) !important;
+}
+
+.dark-theme .border-slate-100 {
+  border-color: var(--border-subtle) !important;
+}
+
+.dark-theme .border-slate-105 {
+  border-color: var(--border-strong) !important;
+}
+
+.dark-theme .border-slate-150 {
+  border-color: var(--border-strong) !important;
+}
+
+.dark-theme .border-slate-200 {
+  border-color: var(--border-strong) !important;
+}
+
+.dark-theme .border-slate-250 {
+  border-color: var(--border-strong) !important;
+}
+
+.dark-theme .border-gray-50 {
+  border-color: var(--border-subtle) !important;
+}
+
+.dark-theme .border-gray-100 {
+  border-color: var(--border-subtle) !important;
+}
+
+/* Text Color Overrides */
+.dark-theme .text-slate-900,
+.dark-theme .text-slate-800 {
+  color: var(--text-primary) !important;
+}
+
+.dark-theme .text-slate-700,
+.dark-theme .text-slate-650,
+.dark-theme .text-slate-600 {
+  color: #e5e7eb !important;
+}
+
+.dark-theme .text-slate-500,
+.dark-theme .text-slate-400 {
+  color: var(--text-secondary) !important;
+}
+
+.dark-theme .text-slate-300 {
+  color: #9ca3af !important;
+}
+
+.dark-theme .text-indigo-950,
+.dark-theme .text-indigo-900,
+.dark-theme .text-indigo-800,
+.dark-theme .text-indigo-700 {
+  color: #bfdbfe !important;
+}
+
+.dark-theme .text-blue-900,
+.dark-theme .text-blue-800,
+.dark-theme .text-blue-700 {
+  color: #93c5fd !important;
+}
+
+.dark-theme .text-emerald-900,
+.dark-theme .text-emerald-800,
+.dark-theme .text-emerald-700 {
+  color: #6ee7b7 !important;
+}
+
+.dark-theme .text-orange-900,
+.dark-theme .text-orange-850,
+.dark-theme .text-orange-800,
+.dark-theme .text-orange-700 {
+  color: #fdba74 !important;
+}
+
+.dark-theme .text-amber-900,
+.dark-theme .text-amber-800,
+.dark-theme .text-amber-700 {
+  color: #fcd34d !important;
+}
+
+.dark-theme .text-rose-900,
+.dark-theme .text-rose-800,
+.dark-theme .text-rose-700,
+.dark-theme .text-red-700,
+.dark-theme .text-red-800 {
+  color: #fca5a5 !important;
+}
+
+/* Input elements style overrides */
+.dark-theme input[type="text"],
+.dark-theme input[type="date"],
+.dark-theme input[type="number"],
+.dark-theme input[type="tel"],
+.dark-theme input[type="password"],
+.dark-theme select,
+.dark-theme textarea {
+  background-color: #1f2937 !important;
+  color: #f3f4f6 !important;
+  border-color: #374151 !important;
+}
+
+.dark-theme input[type="text"]::placeholder,
+.dark-theme input[type="date"]::placeholder,
+.dark-theme textarea::placeholder {
+  color: #6b7280 !important;
+}
+
+/* Main background of screen container */
+.dark-theme #root,
+.dark-theme .min-h-screen {
+  background-color: var(--bg-main) !important;
+}
+
+/* Scrollbars */
+.dark-theme ::-webkit-scrollbar-track {
+  background: var(--bg-main) !important;
+}
+.dark-theme ::-webkit-scrollbar-thumb {
+  background: var(--border-strong) !important;
+  border-radius: 10px;
+}
+.dark-theme ::-webkit-scrollbar-thumb:hover {
+  background: #4b5563 !important;
+}
+

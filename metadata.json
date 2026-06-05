@@ -1,0 +1,6 @@
+{
+  "name": "LỊCH HỌC PRO",
+  "description": "Hệ thống quản lý học viên, xếp lịch học lái xe tự động và quản lý doanh thu thông minh dành cho giáo viên và trường đào tạo lái xe.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

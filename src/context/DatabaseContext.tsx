@@ -27,16 +27,15 @@ import { auth, db } from '../services/firebase';
 import { runTransaction, doc } from 'firebase/firestore';
 import {
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
   signOut,
   onAuthStateChanged,
   browserSessionPersistence,
+  inMemoryPersistence,
   setPersistence
 } from 'firebase/auth';
 import {
   isFirebaseConfigured,
   getUserProfile,
-  createUserProfile,
   fetchStudents,
   saveStudentDoc,
   deleteStudentDoc,
@@ -65,6 +64,9 @@ const generateUniqueId = (prefix: string): string => {
 interface DatabaseContextType {
   currentUser: User | null;
   loading: boolean;
+  authReady: boolean;
+  isSubmittingLogin: boolean;
+  dataLoading: boolean;
   students: Student[];
   instructors: Instructor[];
   vehicles: Vehicle[];
@@ -73,7 +75,7 @@ interface DatabaseContextType {
   settings: AppSettings;
   auditLogs: AuditLog[];
   isFirebase: boolean;
-  login: (email: string, role: UserRole, password?: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<boolean>;
   logout: () => void;
   toggleDatabaseMode: (preferLocal: boolean) => void;
   // Student Actions
@@ -137,7 +139,20 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return defaultSettings;
   });
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [authReady, setAuthReady] = useState(false);
+  const [isSubmittingLogin, setIsSubmittingLogin] = useState(false);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const loading = isSubmittingLogin || dataLoading;
+
+  function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(message)), ms)
+      )
+    ]);
+  }
 
   const [preferLocal, setPreferLocal] = useState(() => {
     return localStorage.getItem('lhp_use_local_simulation') === 'true';
@@ -190,6 +205,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const loadFirestoreData = async () => {
+    setDataLoading(true);
     try {
       // Safe wrapper to fetch individual tables without failing the entire bootstrap
       const safeFetch = async <T,>(fetchFn: () => Promise<T>, fallback: T): Promise<T> => {
@@ -221,41 +237,19 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         safeFetch(getCentralSettings, null as AppSettings | null)
       ]);
 
-      // Hydrate Firestore collections if empty (seed on first boot - only for Admin/Staff who have permissions)
-      const currentUserRole = currentUser?.role || JSON.parse(localStorage.getItem('lhp_user') || '{}').role;
-      const canSeed = currentUserRole === 'Admin' || currentUserRole === 'Staff';
-
-      if (pStudents.length === 0 && pInstructors.length === 0 && canSeed) {
-        console.log('Kho tài nguyên trống. Tự động mồi dữ liệu mẫu...');
-        await runDataSeedingPrimes();
-        // Refetch after seeding
-        const rStudents = await safeFetch(fetchStudents, [] as Student[]);
-        const rInstructors = await safeFetch(fetchInstructors, [] as Instructor[]);
-        const rVehicles = await safeFetch(fetchVehicles, [] as Vehicle[]);
-        const rLessons = await safeFetch(fetchLessons, [] as Lesson[]);
-        const rPayments = await safeFetch(fetchPayments, [] as Payment[]);
-        const rLogs = await safeFetch(fetchAuditLogs, [] as AuditLog[]);
-        const rSettings = await safeFetch(getCentralSettings, null as AppSettings | null);
-
-        setStudents(rStudents);
-        setInstructors(rInstructors);
-        setVehicles(rVehicles);
-        setLessons(rLessons);
-        setPayments(rPayments);
-        setAuditLogs(rLogs);
-        if (rSettings) setSettings(rSettings);
-      } else {
-        setStudents(pStudents);
-        setInstructors(pInstructors);
-        setVehicles(pVehicles);
-        setLessons(pLessons);
-        setPayments(pPayments);
-        setAuditLogs(pLogs);
-        if (pSettings) setSettings(pSettings);
-      }
+      // Do NOT automatically call runDataSeedingPrimes when Firestore is empty.
+      setStudents(pStudents);
+      setInstructors(pInstructors);
+      setVehicles(pVehicles);
+      setLessons(pLessons);
+      setPayments(pPayments);
+      setAuditLogs(pLogs);
+      if (pSettings) setSettings(pSettings);
     } catch (err) {
       console.error('Lỗi khi tải dữ liệu từ Firestore, chuyển sang bộ nhớ tạm:', err);
       loadDataFromLocalStorage();
+    } finally {
+      setDataLoading(false);
     }
   };
 
@@ -263,57 +257,87 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     if (!isFirebase) {
       loadDataFromLocalStorage();
-      setLoading(false);
+      setAuthReady(true);
+      setAuthInitialized(true);
       return;
     }
 
-    setLoading(true);
+    let resolved = false;
+
+    // 5000ms timeout definition
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        console.warn('Firebase Auth onAuthStateChanged timed out after 5000ms. Falling back to localized local states but allowing future login submissions.');
+        loadDataFromLocalStorage();
+        setAuthReady(true);
+        setAuthInitialized(true);
+      }
+    }, 5000);
 
     // Listen to Firebase auth changes
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      // If logout occurred, clear sessions and reset local states
-      if (!fbUser) {
-        if (currentUser) {
-          setCurrentUser(null);
-          localStorage.removeItem('lhp_user');
-        }
-        loadDataFromLocalStorage();
-        if (!authInitialized) {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      async (fbUser) => {
+        if (resolved) return;
+
+        try {
+          if (!fbUser) {
+            if (currentUser) {
+              setCurrentUser(null);
+              localStorage.removeItem('lhp_user');
+            }
+            loadDataFromLocalStorage();
+            if (!authInitialized) {
+              setAuthInitialized(true);
+            }
+            return;
+          }
+
+          if (authInitialized) {
+            return;
+          }
+
+          // Initial page load session restoration:
+          const profile = await getUserProfile(fbUser.uid);
+          if (profile) {
+            setCurrentUser(profile);
+            localStorage.setItem('lhp_user', JSON.stringify(profile));
+            // Do not block initial loading, load firestore data in the background
+            void loadFirestoreData();
+          } else {
+            // Untrusted account with no server-managed profile - force signOut and deny access
+            await signOut(auth);
+            setCurrentUser(null);
+            localStorage.removeItem('lhp_user');
+            console.warn('Session khôi phục bị từ chối: Tài khoản chưa được biên chế trong cơ sở dữ liệu hệ thống.');
+          }
+        } catch (err: any) {
+          console.error('Lỗi khởi tạo session:', err);
+          loadDataFromLocalStorage();
+        } finally {
+          resolved = true;
+          clearTimeout(timer);
           setAuthInitialized(true);
-          setLoading(false);
+          setAuthReady(true);
         }
-        return;
-      }
-
-      // If already initialized by manual login or prior hook run, skip auto layout
-      if (authInitialized) {
-        return;
-      }
-
-      // Initial page load session restoration:
-      try {
-        const profile = await getUserProfile(fbUser.uid);
-        if (profile) {
-          setCurrentUser(profile);
-          localStorage.setItem('lhp_user', JSON.stringify(profile));
-          await loadFirestoreData();
-        } else {
-          // Untrusted account with no server-managed profile - force signOut and deny access
-          await signOut(auth);
-          setCurrentUser(null);
-          localStorage.removeItem('lhp_user');
-          console.warn('Session khôi phục từ chối: Tài khoản chưa được biên chế trong cơ sở dữ liệu hệ thống.');
+      },
+      (error) => {
+        console.error('onAuthStateChanged error:', error);
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          loadDataFromLocalStorage();
+          setAuthInitialized(true);
+          setAuthReady(true);
         }
-      } catch (err) {
-        console.error('Lỗi khởi tạo session:', err);
-        loadDataFromLocalStorage();
-      } finally {
-        setAuthInitialized(true);
-        setLoading(false);
       }
-    });
+    );
 
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+    };
   }, [isFirebase, authInitialized]);
 
   // Helper helper to load mock sets locally
@@ -428,106 +452,118 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // Real or Local Simulation Authentication
-  const login = async (email: string, role: UserRole, password = 'DefaultPassword123'): Promise<boolean> => {
-    setLoading(true);
-    let uName = email.split('@')[0].toUpperCase();
- 
-    if (isFirebase) {
-      try {
-        // Set persistence
-        await setPersistence(auth, browserSessionPersistence);
-        
-        // Attempt sign in
+  const login = async (email: string, password = 'DefaultPassword123'): Promise<boolean> => {
+    setIsSubmittingLogin(true);
+    try {
+      if (isFirebase) {
+        // Try setPersistence with browserSessionPersistence under a 3000ms timeout
+        try {
+          await withTimeout(
+            setPersistence(auth, browserSessionPersistence),
+            3000,
+            'browserSessionPersistence timed out'
+          );
+        } catch (persError) {
+          console.warn('browserSessionPersistence failed or timed out in preview environment, falling back to inMemoryPersistence:', persError);
+          try {
+            await setPersistence(auth, inMemoryPersistence);
+          } catch (memError) {
+            console.error('Failed to set inMemoryPersistence:', memError);
+          }
+        }
+
+        // Attempt sign in with 10000ms timeout
         let userCredential;
         try {
-          userCredential = await signInWithEmailAndPassword(auth, email, password);
+          userCredential = await withTimeout(
+            signInWithEmailAndPassword(auth, email.trim(), password),
+            10000,
+            'Đăng nhập Firebase Auth quá hạn (10 giây). Vui lòng thử lại.'
+          );
         } catch (authError: any) {
-          // Remove auto-registration. Only allow credentials verify
-          if (authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password') {
+          if (
+            authError.code === 'auth/user-not-found' ||
+            authError.code === 'auth/invalid-credential' ||
+            authError.code === 'auth/wrong-password' ||
+            authError.message?.includes('invalid-credential') ||
+            authError.message?.includes('wrong-password')
+          ) {
             throw new Error('Đăng nhập thất bại: Tài khoản hoặc mật khẩu không chính xác.');
           } else {
             throw authError;
           }
         }
- 
+
         const fbUser = userCredential.user;
-        let profile = await getUserProfile(fbUser.uid);
- 
+
+        // Try getUserProfile with 10000ms timeout
+        let profile;
+        try {
+          profile = await withTimeout(
+            getUserProfile(fbUser.uid),
+            10000,
+            'Tải cấu hình người dùng (Firestore profile) quá hạn (10 giây).'
+          );
+        } catch (profileError: any) {
+          console.error('Error fetching getUserProfile:', profileError);
+          throw new Error('Lỗi truy xuất cơ sở dữ liệu hồ sơ: ' + (profileError.message || String(profileError)));
+        }
+
         if (!profile) {
           // Deny login, clear credentials
           await signOut(auth);
-          throw new Error('Quyền truy cập bị từ chối: Tài khoản chưa được Quản trị viên (Admin) tạo hoặc phân quyền trên hệ thống.');
+          throw new Error('Tài khoản chưa được cấp quyền sử dụng hệ thống. Vui lòng liên hệ Admin.');
         }
- 
+
         setCurrentUser(profile);
         localStorage.setItem('lhp_user', JSON.stringify(profile));
- 
-        // Load Live Firestore Data
-        await loadFirestoreData();
- 
+
+        // Load Live Firestore Data in background (Do NOT await loadFirestoreData before returning true)
+        void loadFirestoreData();
+
         await addAuditLog('Đăng nhập', `Đăng nhập thành công với tài khoản Cloud Auth (${profile.role}).`);
-        setLoading(false);
         return true;
-      } catch (err: any) {
-        console.error('Đăng nhập thất bại qua Firebase Auth:', err);
-        const errMsg = err.message || '';
-        if (err.code === 'auth/operation-not-allowed' || errMsg.includes('operation-not-allowed')) {
-          console.log('Firebase Auth Email/Password disabled. Auto fallback to high-fidelity Offline local simulation...');
-          
-          localStorage.setItem('lhp_use_local_simulation', 'true');
-          setPreferLocal(true);
-          
-          const mockUser: User = {
-            uid: generateUniqueId('u'),
-            email,
-            displayName: uName === 'ADMIN' ? 'Nguyễn Anh Dương' : uName === 'HUNG.NV' ? 'Thầy Hùng' : 'Mỹ Linh (Tuyển Sinh)',
-            role
-          };
-          setCurrentUser(mockUser);
-          localStorage.setItem('lhp_user', JSON.stringify(mockUser));
-          setLoading(false);
- 
-          // Logging
-          const logNewLog: AuditLog = {
-            id: generateUniqueId('log'),
-            timestamp: new Date().toISOString(),
-            action: 'Tự động chuyển đổi',
-            details: `Kích hoạt chế độ Offline Simulation thành công do Firebase Email/Password Auth chưa được kích hoạt.`,
-            userId: mockUser.uid,
-            userName: mockUser.displayName,
-            userRole: role
-          };
-          setAuditLogs(prev => [logNewLog, ...prev]);
-          return true;
+      } else {
+        // Simulation Login
+        await new Promise(resolve => setTimeout(resolve, 350));
+        const lowerEmail = email.toLowerCase().trim();
+        let localRole: UserRole = 'Staff';
+        if (lowerEmail === 'admin@lichhocpro.vn' || lowerEmail === 'admin') {
+          localRole = 'Admin';
+        } else if (lowerEmail === 'hung.nv@lichhocpro.vn' || lowerEmail === 'teacher' || lowerEmail === 'instructor') {
+          localRole = 'Instructor';
+        } else if (lowerEmail === 'thao.staff@lichhocpro.vn' || lowerEmail === 'staff') {
+          localRole = 'Staff';
+        } else if (lowerEmail === 'linh.sale@lichhocpro.vn' || lowerEmail === 'sale') {
+          localRole = 'Staff';
+        } else if (lowerEmail === 'accountant@lichhocpro.vn' || lowerEmail === 'accountant') {
+          localRole = 'Accountant';
         }
-        setLoading(false);
-        throw err;
+
+        let uName = email.split('@')[0].toUpperCase();
+        const mockUser: User = {
+          uid: generateUniqueId('u'),
+          email,
+          displayName: uName === 'ADMIN' ? 'Nguyễn Anh Dương' : uName === 'HUNG.NV' ? 'Thầy Hùng' : 'Mỹ Linh (Tuyển Sinh)',
+          role: localRole
+        };
+        setCurrentUser(mockUser);
+        localStorage.setItem('lhp_user', JSON.stringify(mockUser));
+
+        const logNewLog: AuditLog = {
+          id: generateUniqueId('log'),
+          timestamp: new Date().toISOString(),
+          action: 'Đăng nhập',
+          details: `Đăng nhập thành công offline với vai trò mẫu ${localRole}.`,
+          userId: mockUser.uid,
+          userName: mockUser.displayName,
+          userRole: localRole
+        };
+        setAuditLogs(prev => [logNewLog, ...prev]);
+        return true;
       }
-    } else {
-      // Simulation Login Mock mapping
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const mockUser: User = {
-        uid: generateUniqueId('u'),
-        email,
-        displayName: uName === 'ADMIN' ? 'Nguyễn Anh Dương' : uName === 'HUNG.NV' ? 'Thầy Hùng' : 'Mỹ Linh (Tuyển Sinh)',
-        role
-      };
-      setCurrentUser(mockUser);
-      localStorage.setItem('lhp_user', JSON.stringify(mockUser));
-      setLoading(false);
- 
-      // Logging
-      const logNewLog: AuditLog = {
-        id: generateUniqueId('log'),
-        timestamp: new Date().toISOString(),
-        action: 'Đăng nhập',
-        details: `Đăng nhập thành công offline với vai trò mẫu ${role}.`,
-        userId: mockUser.uid,
-        userName: mockUser.displayName,
-        userRole: role
-      };
-      setAuditLogs(prev => [logNewLog, ...prev]);
-      return true;
+    } finally {
+      setIsSubmittingLogin(false);
     }
   };
 
@@ -551,7 +587,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return;
     }
 
-    setLoading(true);
+    setDataLoading(true);
     await addAuditLog('Khôi phục dữ liệu', 'Bắt đầu quá trình nén và mồi phục dọn dữ liệu mẫu từ quản trị viên.');
 
     if (isFirebase) {
@@ -598,7 +634,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       ]);
       safeAlert('Đã hoàn phục cơ sở dữ liệu mô phỏng trong LocalStorage.');
     }
-    setLoading(false);
+    setDataLoading(false);
   };
 
   // --- STUDENT ACTIONS ---
@@ -1104,6 +1140,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       value={{
         currentUser,
         loading,
+        authReady,
+        isSubmittingLogin,
+        dataLoading,
         students,
         instructors,
         vehicles,

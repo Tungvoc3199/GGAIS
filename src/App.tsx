@@ -330,12 +330,12 @@ function AppContent() {
       {/* MAIN VIEW CONTROLLER CANVAS */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-20 md:pb-6 relative">
         {!isFirebase && (
-          <div className="mb-4 rounded-2xl bg-amber-500 text-white p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm border border-amber-600 bg-gradient-to-r from-amber-500 to-orange-500 select-none">
+          <div className="mb-4 rounded-2xl bg-red-650 text-white p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm border border-red-700 bg-gradient-to-r from-red-600 to-red-750 select-none">
             <div className="flex items-center gap-2.5">
               <span className="text-xl">⚠️</span>
               <div className="text-xs font-bold leading-relaxed">
-                <span className="block font-black uppercase tracking-wider text-[10px]">DEMO MODE — DỮ LIỆU KHÔNG ĐỒNG BỘ CLOUD</span>
-                <span className="text-amber-100 font-medium">Lịch học, thu chi lái xe hiện tại được lưu cục bộ trên trình duyệt Web này. Vui lòng thiết lập Firebase để đồng bộ hóa.</span>
+                <span className="block font-black uppercase tracking-wider text-[10px]">DEMO MODE — DỮ LIỆU CHỈ LƯU TRÊN THIẾT BỊ, KHÔNG ĐỒNG BỘ CLOUD</span>
+                <span className="text-red-100 font-medium">Lịch học, thu chi lái xe hiện tại được lưu cục bộ trên trình duyệt Web này. Vui lòng kết nối Firebase để lưu dữ liệu an toàn.</span>
               </div>
             </div>
             <button
@@ -348,7 +348,20 @@ function AppContent() {
         )}
 
         {activeView === 'tong-quan' && (
-          <Dashboard setView={setActiveView} />
+          <Dashboard
+            onNavigate={setActiveView}
+            onOpenQuickForm={(formType) => {
+              if (formType === 'student') {
+                setActiveView('hoc-vien');
+                setQuickStudentForm(true);
+              } else if (formType === 'schedule') {
+                setActiveView('lich-hoc');
+                setQuickLessonForm(true);
+              } else if (formType === 'payment') {
+                setActiveView('finance');
+              }
+            }}
+          />
         )}
 
         {activeView === 'lich-hoc' && (

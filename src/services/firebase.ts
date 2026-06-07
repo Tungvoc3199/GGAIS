@@ -70,15 +70,14 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Connection check as required by Firebase skill
-async function testConnection() {
+// Connection check helper (not run automatically at boot to prevent noise/permission warnings before login)
+export async function testConnectionAfterLogin(uid: string) {
   try {
-    // If the config has mock keys, avoid crashing app immediately but log it safely
     if (firebaseConfig.apiKey.includes('mock-api-key')) {
       console.warn("Using placeholder Firebase configuration. Please set up real Firebase project credential.");
       return;
     }
-    await getDocFromServer(doc(db, 'test', 'connection'));
+    await getDocFromServer(doc(db, 'users', uid));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
       console.error("Please check your Firebase configuration: Client is offline.");
@@ -87,5 +86,3 @@ async function testConnection() {
     }
   }
 }
-
-testConnection();

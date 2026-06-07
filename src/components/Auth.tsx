@@ -9,7 +9,7 @@ import { UserRole } from '../types';
 import { ShieldCheck, User as UserIcon, Keyboard, AlertCircle, Car } from 'lucide-react';
 
 export const Auth: React.FC = () => {
-  const { login, loading, isFirebase, toggleDatabaseMode } = useDatabase();
+  const { login, authReady, isSubmittingLogin, isFirebase, toggleDatabaseMode } = useDatabase();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -42,7 +42,7 @@ export const Auth: React.FC = () => {
     }
   ];
 
-  const showToggle = (import.meta as any).env.DEV || (import.meta as any).env.VITE_ENABLE_DEMO_MODE === 'true';
+  const showToggle = (import.meta as any).env.DEV === true || String((import.meta as any).env.VITE_ENABLE_DEMO_MODE) === 'true';
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,35 +58,31 @@ export const Auth: React.FC = () => {
       return;
     }
 
-    // Match with our local simulation emails
-    const lowerEmail = email.toLowerCase().trim();
-    let assignedRole: UserRole = 'Staff';
-
-    if (lowerEmail === 'admin@lichhocpro.vn' || lowerEmail === 'admin') {
-      assignedRole = 'Admin';
-    } else if (lowerEmail === 'hung.nv@lichhocpro.vn' || lowerEmail === 'teacher' || lowerEmail === 'instructor') {
-      assignedRole = 'Instructor';
-    } else if (lowerEmail === 'thao.staff@lichhocpro.vn' || lowerEmail === 'staff') {
-      assignedRole = 'Staff';
-    }
-
     try {
-      let targetEmail = email;
-      if (lowerEmail === 'admin') targetEmail = 'admin@lichhocpro.vn';
-      else if (lowerEmail === 'teacher' || lowerEmail === 'instructor') targetEmail = 'hung.nv@lichhocpro.vn';
-      else if (lowerEmail === 'staff') targetEmail = 'thao.staff@lichhocpro.vn';
-      else if (!targetEmail.includes('@')) targetEmail = `${targetEmail}@lichhocpro.vn`;
+      if (isFirebase) {
+        const success = await login(email.trim().toLowerCase(), password);
+        if (!success) {
+          setError('Xác thực thất bại. Vui lòng thử lại.');
+        }
+      } else {
+        const lowerEmail = email.toLowerCase().trim();
+        let targetEmail = email;
+        if (lowerEmail === 'admin') targetEmail = 'admin@lichhocpro.vn';
+        else if (lowerEmail === 'teacher' || lowerEmail === 'instructor') targetEmail = 'hung.nv@lichhocpro.vn';
+        else if (lowerEmail === 'staff') targetEmail = 'thao.staff@lichhocpro.vn';
+        else if (!targetEmail.includes('@')) targetEmail = `${targetEmail}@lichhocpro.vn`;
 
-      const success = await login(targetEmail, assignedRole, password);
-      if (!success) {
-        setError('Xác thực thất bại. Vui lòng thử lại.');
+        const success = await login(targetEmail, password);
+        if (!success) {
+          setError('Xác thực thất bại. Vui lòng thử lại.');
+        }
       }
     } catch (err: any) {
       console.error('Lỗi đăng nhập manual:', err);
       let errMsg = err.message || 'Xác thực không thành công. Hãy chắc chắn mật khẩu đúng.';
       if (err.code === 'auth/operation-not-allowed' || errMsg.includes('operation-not-allowed')) {
         errMsg = 'auth/operation-not-allowed: Dự án Firebase của bạn chưa kích hoạt phương thức Đăng nhập bằng Email/Password. Hãy vào Firebase Console > Authentication > Sign-in method để bật, hoặc chọn "Simulation (LocalStorage)" phía trên để dùng thử offline đầy đủ tính năng ngay.';
-      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || errMsg.includes('mật khẩu') || errMsg.includes('Mật khẩu')) {
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || errMsg.includes('mật khẩu') || errMsg.includes('Mật khẩu') || errMsg.includes('mật khẩu không chính xác')) {
         errMsg = 'Mật khẩu nhập vào không chính xác cho tài khoản này.';
       } else if (err.code === 'auth/network-request-failed') {
         errMsg = 'Lỗi kết nối mạng Firebase. Vui lòng kiểm tra lại thiết bị của bạn.';
@@ -100,7 +96,7 @@ export const Auth: React.FC = () => {
   const handleQuickLogin = async (demEmail: string, demRole: UserRole) => {
     setError('');
     try {
-      const success = await login(demEmail, demRole);
+      const success = await login(demEmail, 'DefaultPassword123');
       if (!success) {
         setError('Không thể đăng nhập tài khoản demo.');
       }
@@ -109,7 +105,7 @@ export const Auth: React.FC = () => {
       let errMsg = err.message || 'Không thể đăng nhập tài khoản demo.';
       if (err.code === 'auth/operation-not-allowed' || errMsg.includes('operation-not-allowed')) {
         errMsg = 'auth/operation-not-allowed: Dự án Firebase này chưa kích hoạt phương thức Đăng nhập bằng Email/Password. Vui lòng vào Firebase Console để bật, hoặc bật chế độ "Simulation (LocalStorage)" phía trên để bỏ qua xác thực Cloud!';
-      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/email-already-in-use' || errMsg.includes('mật khẩu') || errMsg.includes('Mật khẩu')) {
+      } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || err.code === 'auth/email-already-in-use' || errMsg.includes('mật khẩu') || errMsg.includes('Mật khẩu') || errMsg.includes('mật khẩu không chính xác')) {
         errMsg = `Tài khoản demo (${demEmail}) đã được cài đặt mật khẩu riêng. Vui lòng đăng nhập với thông tin tài khoản và mật khẩu của quý khách ở phần nhập thủ công.`;
       } else if (err.code === 'auth/network-request-failed') {
         errMsg = 'Lỗi kết nối mạng đến máy chủ Firebase.';
@@ -171,6 +167,15 @@ export const Auth: React.FC = () => {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-8 px-4 shadow-sm border border-slate-100 rounded-3xl sm:px-10">
           <form className="space-y-6" onSubmit={handleManualLogin}>
+            {isFirebase && !authReady && (
+              <div className="rounded-xl bg-blue-50/50 p-3 border border-blue-100 flex items-start gap-2.5">
+                <AlertCircle className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+                <span className="text-xs text-blue-800 font-medium leading-relaxed">
+                  Đang khởi tạo kết nối Cloud. Anh vẫn có thể thử đăng nhập.
+                </span>
+              </div>
+            )}
+
             {error && (
               <div className="rounded-xl bg-red-50 p-3 border border-red-100 flex flex-col gap-2 bg-gradient-to-br from-red-50/50 to-amber-50/50">
                 <div className="flex items-start gap-2.5">
@@ -229,14 +234,14 @@ export const Auth: React.FC = () => {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={isSubmittingLogin === true}
               className="w-full flex justify-center items-center py-3.5 px-4 rounded-2xl font-bold text-sm text-white bg-blue-600 hover:bg-blue-700 transition-all cursor-pointer shadow-md hover:shadow-lg disabled:opacity-50"
             >
-              {loading ? 'Đang xác thực thông tin...' : 'ĐĂNG NHẬP HỆ THỐNG'}
+              {isSubmittingLogin ? 'Đang xác thực thông tin...' : 'ĐĂNG NHẬP HỆ THỐNG'}
             </button>
           </form>
 
-          {showToggle && (
+          {showToggle && !isFirebase && (
             <div className="mt-8">
               <div className="relative flex items-center justify-center mb-6">
                 <div className="absolute inset-0 flex items-center">

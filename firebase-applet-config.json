@@ -1,10 +1,10 @@
 {
-  "projectId": "lich-hoc-pro-production",
-  "appId": "1:889340091758:web:8bde95c999918acab9757f",
-  "apiKey": "AIzaSyBIrdLQtrGG3VoTD-7IAOABj6jt1RdxeG0",
-  "authDomain": "lich-hoc-pro-production.firebaseapp.com",
-  "firestoreDatabaseId": "(default)",
-  "storageBucket": "lich-hoc-pro-production.firebasestorage.app",
-  "messagingSenderId": "889340091758",
+  "projectId": "gen-lang-client-0341938104",
+  "appId": "1:562099437558:web:f14ffbdfa30e25fbad11d7",
+  "apiKey": "AIzaSyCwL6l9l13i_ScJCkFYPj69r7rOUdNNaNU",
+  "authDomain": "gen-lang-client-0341938104.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-1bdc1374-42c6-4437-90ab-3db5d299bee7",
+  "storageBucket": "gen-lang-client-0341938104.firebasestorage.app",
+  "messagingSenderId": "562099437558",
   "measurementId": ""
 }

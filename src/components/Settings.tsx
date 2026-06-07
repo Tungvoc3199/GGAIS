@@ -148,10 +148,19 @@ export const Settings: React.FC = () => {
   };
 
   const handleResetData = () => {
-    const ok = window.confirm('Quý khách muốn đặt lại TOÀN BỘ số liệu về dữ liệu mô phỏng ban đầu? Các học viên mới và giao dịch thêm tay sẽ bị hủy.');
+    const confirmMsg = currentUser?.role === 'Admin'
+      ? 'CẢNH BÁO AN TOÀN: Thao tác này sẽ ghi đè toàn bộ dữ liệu hiện tại bằng dữ liệu demo chuẩn. Bạn có chắc chắn muốn nạp dữ liệu demo không?'
+      : 'Thao tác không hợp lệ: Bạn không đủ quyền quản trị (Admin) để thực hiện hành động này.';
+
+    if (currentUser?.role !== 'Admin') {
+      alert(confirmMsg);
+      return;
+    }
+
+    const ok = window.confirm(confirmMsg);
     if (ok) {
       resetToDefaultDemo();
-      alert('Đã khôi phục trạng thái chuẩn thành công. Vui lòng tải lại trang.');
+      alert('Đã nạp dữ liệu demo chuẩn thành công. Vui lòng tải lại trang.');
       window.location.reload();
     }
   };
@@ -396,13 +405,15 @@ export const Settings: React.FC = () => {
 
         {/* Action button triggers */}
         <div className="flex justify-between items-center pt-3 border-t border-slate-100 gap-3">
-          <button
-            type="button"
-            onClick={handleResetData}
-            className="bg-red-50 hover:bg-red-100 text-red-650 font-bold py-2.5 px-4 rounded-xl cursor-pointer flex items-center gap-1.5 transition-all"
-          >
-            <RefreshCcw className="h-4 w-4" /> Đặt lại dữ liệu mẫu
-          </button>
+          {currentUser?.role === 'Admin' && (
+            <button
+              type="button"
+              onClick={handleResetData}
+              className="bg-red-50 hover:bg-red-100 text-red-650 font-bold py-2.5 px-4 rounded-xl cursor-pointer flex items-center gap-1.5 transition-all"
+            >
+              <RefreshCcw className="h-4 w-4" /> Nạp dữ liệu demo
+            </button>
+          )}
 
           {currentUser?.role === 'Admin' && (
             <button

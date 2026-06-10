@@ -109,8 +109,40 @@ export async function fetchStudents(): Promise<Student[]> {
   return listCollection<Student>('students');
 }
 
+/**
+ * Student profile edits still run through the browser during Sprint 1.
+ * Financial ledger and completed-session counters are server-managed fields.
+ * Preserve those trusted values to prevent stale optimistic UI writes from
+ * overwriting a concurrent server transaction.
+ */
 export async function saveStudentDoc(student: Student): Promise<void> {
-  return writeDocument('students', student);
+  if (!isFirebaseConfigured()) return;
+  const path = `students/${student.id}`;
+
+  try {
+    const studentRef = doc(db, 'students', student.id);
+    const currentDoc = await getDoc(studentRef);
+
+    if (!currentDoc.exists()) {
+      await setDoc(studentRef, student);
+      return;
+    }
+
+    const current = currentDoc.data() as Student;
+    const paidAmount = Number(current.paidAmount || 0);
+    const completedSessions = Number(current.completedSessions || 0);
+    const protectedStudent: Student = {
+      ...student,
+      paidAmount,
+      remainingAmount: Math.max(0, Number(student.totalFee || 0) - paidAmount),
+      completedSessions,
+      remainingSessions: Math.max(0, Number(student.totalSessions || 0) - completedSessions)
+    };
+
+    await setDoc(studentRef, protectedStudent);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
 }
 
 export async function deleteStudentDoc(id: string): Promise<void> {

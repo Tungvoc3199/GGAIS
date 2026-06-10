@@ -1,5 +1,7 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
+import admin from "firebase-admin";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 
@@ -12,176 +14,173 @@ declare global {
   }
 }
 
-let aiInstance: any = null;
+const configPath = path.join(process.cwd(), "src", "firebase-applet-config.json");
+let firebaseConfig: any = {};
+try {
+  firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+} catch (error) {
+  console.error("Lỗi đọc cấu hình Firebase:", error);
+}
 
-function getGeminiClient() {
+if (admin.apps.length === 0) {
+  admin.initializeApp({ projectId: firebaseConfig.projectId });
+}
+
+let aiInstance: GoogleGenAI | null = null;
+const ocrRateLimit = new Map<string, { count: number; windowStartedAt: number }>();
+
+function getGeminiClient(): GoogleGenAI {
   if (!aiInstance) {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not defined in the environment environment variables.");
-    }
+    if (!apiKey) throw new Error("GEMINI_API_KEY chưa được cấu hình.");
     aiInstance = new GoogleGenAI({
-      apiKey: apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        }
-      }
+      apiKey,
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } }
     });
   }
   return aiInstance;
 }
 
-// Initialize Firebase Admin SDK for Cloud Run ADC or local configurations
-import admin from "firebase-admin";
-import fs from "fs";
-
-const configPath = path.join(process.cwd(), "src", "firebase-applet-config.json");
-let firebaseConfig: any = {};
-try {
-  firebaseConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-} catch (e) {
-  console.error("Lỗi đọc cấu hình Firebase:", e);
-}
-
-if (admin.apps.length === 0) {
-  admin.initializeApp({
-    projectId: firebaseConfig.projectId,
-  });
-}
-
 function getAdminDb() {
   const dbId = firebaseConfig.firestoreDatabaseId;
-  return dbId ? admin.firestore(dbId) : admin.firestore();
+  return dbId && dbId !== "(default)" ? admin.firestore(dbId) : admin.firestore();
+}
+
+function makeId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+}
+
+function getVietnamDateString(date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(date);
+}
+
+function timeToMinutes(time: string): number {
+  const [hours, minutes] = String(time || "").split(":").map(Number);
+  return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : Number.NaN;
+}
+
+function doIntervalsOverlap(start1: string, end1: string, start2: string, end2: string): boolean {
+  return timeToMinutes(start1) < timeToMinutes(end2) && timeToMinutes(start2) < timeToMinutes(end1);
+}
+
+function getLocalWeekday(dateString: string): number {
+  const [year, month, day] = String(dateString || "").split("-").map(Number);
+  if (!year || !month || !day) return -1;
+  const weekday = new Date(year, month - 1, day).getDay();
+  return weekday === 0 ? 7 : weekday;
+}
+
+function isLocalDemoRequest(req: express.Request): boolean {
+  return process.env.NODE_ENV !== "production" && req.headers["x-demo-mode"] === "true";
 }
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
-  // Set payload size limits to securely support base64 identity card images
-  app.use(express.json({ limit: "15mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+  app.use(express.json({ limit: "6mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "6mb" }));
 
-  // Middleware checking authorization and fetching profile from Firestore
-  async function checkAuth(req: any, res: any, next: any) {
+  async function checkAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!authHeader?.startsWith("Bearer ")) {
       return res.status(401).json({ error: "Không tìm thấy mã xác thực Authorization." });
     }
-    const token = authHeader.split(" ")[1];
+
     try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
+      const decodedToken = await admin.auth().verifyIdToken(authHeader.substring(7));
       const adminDb = getAdminDb();
       const userDoc = await adminDb.collection("users").doc(decodedToken.uid).get();
+
       if (!userDoc.exists) {
-        return res.status(403).json({ error: "Tài khoản của bạn chưa được cấp quyền truy cập hệ thống. Vui lòng liên hệ Admin để gán quyền." });
+        return res.status(403).json({ error: "Tài khoản chưa được cấp quyền sử dụng hệ thống." });
       }
-      req.currentUserProfile = userDoc.data();
+
+      req.currentUserProfile = {
+        ...userDoc.data(),
+        uid: decodedToken.uid,
+        email: decodedToken.email || userDoc.data()?.email
+      };
       next();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Xác thực ID Token thất bại:", error);
       return res.status(401).json({ error: "Xác thực không hợp lệ hoặc đã hết hạn." });
     }
   }
 
-  // Middleware validating Admin-only role for critical user provisioning tasks
-  async function checkAdmin(req: any, res: any, next: any) {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "Không tìm thấy mã xác thực Authorization." });
-    }
-    const token = authHeader.split(" ")[1];
-    try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const adminDb = getAdminDb();
-      const userDoc = await adminDb.collection("users").doc(decodedToken.uid).get();
-      if (!userDoc.exists || userDoc.data()?.role !== "Admin") {
-        return res.status(403).json({ error: "Quyền truy cập bị từ chối: Yêu cầu đặc quyền Admin." });
-      }
-      req.adminUser = decodedToken;
-      next();
-    } catch (error: any) {
-      console.error("Xác thực đặc quyền Admin thất bại:", error);
-      return res.status(401).json({ error: "Xác thực không hợp lệ hoặc đã hết hạn." });
-    }
-  }
-
-  // Helper calculation definitions
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(":").map(Number);
-    return h * 60 + m;
-  }
-
-  function doIntervalsOverlap(start1: string, end1: string, start2: string, end2: string): boolean {
-    return timeToMinutes(start1) < timeToMinutes(end2) && timeToMinutes(start2) < timeToMinutes(end1);
-  }
-
-  // --- SECURE APIs ---
-
-  // 1. Provisions new users safely under complete server-side access bounds
-  app.post("/api/admin/create-user", checkAdmin, async (req, res) => {
-    const { email, password, displayName, role } = req.body;
-    if (!email || !password || !displayName || !role) {
-      return res.status(400).json({ error: "Vui lòng cung cấp đầy đủ thông tin: email, password, displayName, role." });
-    }
-    if (!["Admin", "Staff", "Instructor", "Accountant"].includes(role)) {
-      return res.status(400).json({ error: "Vai trò người dùng được yêu cầu không hợp lệ." });
-    }
-    try {
-      const userRecord = await admin.auth().createUser({
-        email,
-        password,
-        displayName,
-      });
-      
-      const adminDb = getAdminDb();
-      const userProfile = {
-        uid: userRecord.uid,
-        email,
-        displayName,
-        role,
+  async function checkAuthOrLocalDemo(req: express.Request, res: express.Response, next: express.NextFunction) {
+    if (isLocalDemoRequest(req)) {
+      req.currentUserProfile = {
+        uid: "offline-demo",
+        email: "offline-demo@lichhocpro.local",
+        displayName: "Offline Demo",
+        role: "Staff"
       };
-      await adminDb.collection("users").doc(userRecord.uid).set(userProfile);
-      
-      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      next();
+      return;
+    }
+    await checkAuth(req, res, next);
+  }
+
+  function requireRoles(...roles: string[]) {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      if (!roles.includes(req.currentUserProfile?.role)) {
+        return res.status(403).json({ error: "Bạn không có quyền thực hiện thao tác này." });
+      }
+      next();
+    };
+  }
+
+  app.post("/api/admin/create-user", checkAuth, requireRoles("Admin"), async (req, res) => {
+    const { email, password, displayName, role } = req.body;
+    if (!email || !password || !displayName || !["Admin", "Staff", "Instructor", "Accountant"].includes(role)) {
+      return res.status(400).json({ error: "Thông tin tài khoản hoặc vai trò không hợp lệ." });
+    }
+
+    try {
+      const userRecord = await admin.auth().createUser({ email, password, displayName });
+      const profile = { uid: userRecord.uid, email, displayName, role };
+      const adminDb = getAdminDb();
+      await adminDb.collection("users").doc(userRecord.uid).set(profile);
+
+      const logId = makeId("log");
       await adminDb.collection("auditLogs").doc(logId).set({
         id: logId,
         timestamp: new Date().toISOString(),
         action: "Tạo tài khoản thành viên",
-        details: `Quản trị viên ${req.adminUser.email} đã tạo tài khoản thành viên mới: ${displayName} (${email}) với vai trò ${role}.`,
-        userId: req.adminUser.uid,
-        userName: req.adminUser.email || "Admin",
+        details: `Admin đã tạo tài khoản ${displayName} (${email}) với vai trò ${role}.`,
+        userId: req.currentUserProfile.uid,
+        userName: req.currentUserProfile.displayName || req.currentUserProfile.email,
         userRole: "Admin"
       });
 
-      return res.json({ success: true, user: userProfile });
+      return res.json({ success: true, user: profile });
     } catch (error: any) {
-      console.error("Lỗi thiết lập tài khoản thành viên mới:", error);
-      return res.status(500).json({ error: error.message || "Lỗi máy chủ khi thiết lập tài khoản." });
+      console.error("Lỗi tạo tài khoản:", error);
+      return res.status(500).json({ error: error.message || "Không thể tạo tài khoản." });
     }
   });
 
-  // 2. Creates payment records with safe student ledger adjustments inside firestore transaction
-  app.post("/api/payments/create", checkAuth, async (req, res) => {
+  app.post("/api/payments/create", checkAuth, requireRoles("Admin", "Staff", "Accountant"), async (req, res) => {
     const user = req.currentUserProfile;
-    if (!["Admin", "Staff", "Accountant"].includes(user.role)) {
-      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ tuyển sinh hoặc kế toán mới được phép thu học phí." });
-    }
-
     const { studentId, paymentDate, amount, method, category, receiver, notes } = req.body;
-    if (!studentId || !amount) {
-      return res.status(400).json({ error: "Bắt buộc cung cấp mã học viên và số tiền thanh toán." });
+    const numericAmount = Number(amount);
+
+    if (!studentId || !Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(400).json({ error: "Mã học viên hoặc số tiền không hợp lệ." });
     }
 
     const adminDb = getAdminDb();
-    const payId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const shouldApproveImmediately = (user.role === "Admin" || user.role === "Accountant" || (category !== "Thanh toán bổ sung" && category !== "Khác"));
-    const freshPayment = {
-      id: payId,
+    const payment = {
+      id: makeId("pay"),
       studentId,
-      paymentDate: paymentDate || new Date().toISOString().split("T")[0],
-      amount: Number(amount),
+      paymentDate: paymentDate || getVietnamDateString(),
+      amount: numericAmount,
       method: method || "Chuyển khoản",
       category: category || "Đợt 1",
       receiver: receiver || user.displayName,
@@ -189,109 +188,83 @@ async function startServer() {
       isCancelled: false,
       createdAt: new Date().toISOString(),
       createdBy: user.email,
-      status: shouldApproveImmediately ? "Đã duyệt" : "Chờ duyệt"
+      status: user.role === "Admin" || user.role === "Accountant" || !["Thanh toán bổ sung", "Khác"].includes(category)
+        ? "Đã duyệt"
+        : "Chờ duyệt"
     };
 
     try {
       await adminDb.runTransaction(async (transaction) => {
         const studentRef = adminDb.collection("students").doc(studentId);
         const studentDoc = await transaction.get(studentRef);
-        if (!studentDoc.exists) {
-          throw new Error("Không tìm thấy học viên trong cơ sở dữ liệu.");
-        }
+        if (!studentDoc.exists) throw new Error("Không tìm thấy học viên.");
+
         const studentData = studentDoc.data()!;
+        transaction.set(adminDb.collection("payments").doc(payment.id), payment);
 
-        // Save payment record
-        const paymentRef = adminDb.collection("payments").doc(payId);
-        transaction.set(paymentRef, freshPayment);
-
-        // Update student balances only if approved immediately
-        if (freshPayment.status === "Đã duyệt") {
-          const newPaid = Number(studentData.paidAmount || 0) + Number(amount);
-          const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - newPaid);
+        if (payment.status === "Đã duyệt") {
+          const paidAmount = Number(studentData.paidAmount || 0) + numericAmount;
           transaction.update(studentRef, {
-            paidAmount: newPaid,
-            remainingAmount: newRemaining,
+            paidAmount,
+            remainingAmount: Math.max(0, Number(studentData.totalFee || 0) - paidAmount),
             reminderStatus: "Chưa nhắc"
           });
         }
 
-        // Write audit log
-        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const logRef = adminDb.collection("auditLogs").doc(logId);
-        transaction.set(logRef, {
+        const logId = makeId("log");
+        transaction.set(adminDb.collection("auditLogs").doc(logId), {
           id: logId,
           timestamp: new Date().toISOString(),
           action: "Thu học phí",
-          details: `Ghi nhận thu học phí từ học viên ${studentData.name}: +${Number(amount).toLocaleString('vi-VN')} đ cho hạng mục '${category}' (${freshPayment.status}) [Giao dịch Server].`,
+          details: `Ghi nhận ${numericAmount.toLocaleString("vi-VN")} đ từ ${studentData.name} (${payment.status}) [Server Transaction].`,
           userId: user.uid,
           userName: user.displayName,
           userRole: user.role
         });
       });
 
-      return res.json({ success: true, payment: freshPayment });
+      return res.json({ success: true, payment });
     } catch (error: any) {
-      console.error("Giao dịch ghi thu học phí thất bại:", error);
-      return res.status(500).json({ error: error.message || "Xảy ra sự cố khi ghi biên lai học phí." });
+      console.error("Giao dịch thu học phí thất bại:", error);
+      return res.status(409).json({ error: error.message || "Không thể ghi nhận học phí." });
     }
   });
 
-  // 3. Approves raw records securely, recalculating student parameters inside transaction
-  app.post("/api/payments/approve", checkAuth, async (req, res) => {
+  app.post("/api/payments/approve", checkAuth, requireRoles("Admin", "Accountant"), async (req, res) => {
     const user = req.currentUserProfile;
-    if (!["Admin", "Accountant"].includes(user.role)) {
-      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Yêu cầu đặc quyền Admin hoặc Kế toán để duyệt biên lai tài chính." });
-    }
-
     const { paymentId } = req.body;
-    if (!paymentId) {
-      return res.status(400).json({ error: "Vui lòng cung cập mã thanh toán paymentId cần duyệt." });
-    }
+    if (!paymentId) return res.status(400).json({ error: "Thiếu paymentId." });
 
     const adminDb = getAdminDb();
-
     try {
       await adminDb.runTransaction(async (transaction) => {
         const paymentRef = adminDb.collection("payments").doc(paymentId);
         const paymentDoc = await transaction.get(paymentRef);
-        if (!paymentDoc.exists) {
-          throw new Error("Không tìm thấy chứng từ thu chi.");
-        }
-        const paymentData = paymentDoc.data()!;
+        if (!paymentDoc.exists) throw new Error("Không tìm thấy phiếu thu.");
 
-        if (paymentData.status === "Đã duyệt") {
-          throw new Error("Biên lai học phí đã được duyệt trước đó.");
-        }
-        if (paymentData.isCancelled) {
-          throw new Error("Biên lai đã bị hủy từ trước, không thể duyệt.");
-        }
+        const paymentData = paymentDoc.data()!;
+        if (paymentData.status === "Đã duyệt") throw new Error("Phiếu đã được duyệt trước đó.");
+        if (paymentData.isCancelled) throw new Error("Phiếu đã bị hủy.");
 
         const studentRef = adminDb.collection("students").doc(paymentData.studentId);
         const studentDoc = await transaction.get(studentRef);
-        if (!studentDoc.exists) {
-          throw new Error("Học viên sở hữu biên lai không tồn tại.");
-        }
+        if (!studentDoc.exists) throw new Error("Không tìm thấy học viên.");
+
         const studentData = studentDoc.data()!;
+        const paidAmount = Number(studentData.paidAmount || 0) + Number(paymentData.amount || 0);
 
-        // Commit state
         transaction.update(paymentRef, { status: "Đã duyệt" });
-
-        // Safely adjust student ledger
-        const newPaid = Number(studentData.paidAmount || 0) + Number(paymentData.amount || 0);
-        const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - newPaid);
         transaction.update(studentRef, {
-          paidAmount: newPaid,
-          remainingAmount: newRemaining
+          paidAmount,
+          remainingAmount: Math.max(0, Number(studentData.totalFee || 0) - paidAmount)
         });
 
-        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const logRef = adminDb.collection("auditLogs").doc(logId);
-        transaction.set(logRef, {
+        const logId = makeId("log");
+        transaction.set(adminDb.collection("auditLogs").doc(logId), {
           id: logId,
           timestamp: new Date().toISOString(),
           action: "Duyệt học phí",
-          details: `Phê duyệt thành công biên lai học phí ID ${paymentId} số tiền: ${Number(paymentData.amount).toLocaleString('vi-VN')} đ cho HV ${studentData.name} [Giao dịch Server].`,
+          details: `Duyệt phiếu ${paymentId} cho ${studentData.name} [Server Transaction].`,
           userId: user.uid,
           userName: user.displayName,
           userRole: user.role
@@ -301,67 +274,51 @@ async function startServer() {
       return res.json({ success: true });
     } catch (error: any) {
       console.error("Giao dịch duyệt học phí thất bại:", error);
-      return res.status(500).json({ error: error.message || "Lỗi khi duyệt chứng từ thanh toán." });
+      return res.status(409).json({ error: error.message || "Không thể duyệt phiếu." });
     }
   });
 
-  // 4. Cancels payments securely, reversing balances on student document in transaction
-  app.post("/api/payments/cancel", checkAuth, async (req, res) => {
+  app.post("/api/payments/cancel", checkAuth, requireRoles("Admin", "Accountant"), async (req, res) => {
     const user = req.currentUserProfile;
-    if (!["Admin", "Accountant"].includes(user.role)) {
-      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu." });
-    }
-
     const { paymentId, reason } = req.body;
-    if (!paymentId || !reason) {
-      return res.status(400).json({ error: "Bắt buộc cung cấp mã paymentId và lý do hủy." });
+    if (!paymentId || !String(reason || "").trim()) {
+      return res.status(400).json({ error: "Thiếu paymentId hoặc lý do hủy." });
     }
 
     const adminDb = getAdminDb();
-
     try {
       await adminDb.runTransaction(async (transaction) => {
         const paymentRef = adminDb.collection("payments").doc(paymentId);
         const paymentDoc = await transaction.get(paymentRef);
-        if (!paymentDoc.exists) {
-          throw new Error("Không tìm thấy chứng từ cần hủy.");
-        }
-        const paymentData = paymentDoc.data()!;
+        if (!paymentDoc.exists) throw new Error("Không tìm thấy phiếu thu.");
 
-        if (paymentData.isCancelled) {
-          throw new Error("Biên lai học phí đã được hủy trước đó.");
-        }
+        const paymentData = paymentDoc.data()!;
+        if (paymentData.isCancelled) throw new Error("Phiếu đã được hủy trước đó.");
 
         const studentRef = adminDb.collection("students").doc(paymentData.studentId);
         const studentDoc = await transaction.get(studentRef);
-        if (!studentDoc.exists) {
-          throw new Error("Học viên sở hữu biên lai không tồn tại.");
-        }
-        const studentData = studentDoc.data()!;
+        if (!studentDoc.exists) throw new Error("Không tìm thấy học viên.");
 
-        // Update payment cancellation values
+        const studentData = studentDoc.data()!;
         transaction.update(paymentRef, {
           isCancelled: true,
-          cancellationReason: reason
+          cancellationReason: String(reason).trim()
         });
 
-        // Safely reverse student ledger if already approved prior
         if (paymentData.status === "Đã duyệt") {
-          const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
-          const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
+          const paidAmount = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
           transaction.update(studentRef, {
-            paidAmount: revPaid,
-            remainingAmount: newRemaining
+            paidAmount,
+            remainingAmount: Math.max(0, Number(studentData.totalFee || 0) - paidAmount)
           });
         }
 
-        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const logRef = adminDb.collection("auditLogs").doc(logId);
-        transaction.set(logRef, {
+        const logId = makeId("log");
+        transaction.set(adminDb.collection("auditLogs").doc(logId), {
           id: logId,
           timestamp: new Date().toISOString(),
-          action: "Hủy Biên Lai Doanh Thu",
-          details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason} [Giao dịch Server].`,
+          action: "Hủy phiếu thu",
+          details: `Hủy phiếu ${paymentId}. Lý do: ${String(reason).trim()} [Server Transaction].`,
           userId: user.uid,
           userName: user.displayName,
           userRole: user.role
@@ -371,293 +328,196 @@ async function startServer() {
       return res.json({ success: true });
     } catch (error: any) {
       console.error("Giao dịch hủy học phí thất bại:", error);
-      return res.status(500).json({ error: error.message || "Lỗi khi hủy biên lai học phí." });
+      return res.status(409).json({ error: error.message || "Không thể hủy phiếu." });
     }
   });
 
-  // 5. Handles batch-confirm of scheduling sugerences, transactional check with rigid constraints
-  app.post("/api/lessons/batch-confirm", checkAuth, async (req, res) => {
+  app.post("/api/lessons/batch-confirm", checkAuth, requireRoles("Admin", "Staff"), async (req, res) => {
     const user = req.currentUserProfile;
-    const { lessons, overrideReason } = req.body;
-    if (!lessons || !Array.isArray(lessons)) {
-      return res.status(400).json({ error: "Định dạng danh sách ca tập gửi lên không hợp lệ." });
+    const lessons = Array.isArray(req.body.lessons) ? req.body.lessons : [];
+    const overrideReason = String(req.body.overrideReason || "").trim();
+
+    if (!lessons.length) {
+      return res.status(400).json({ error: "Danh sách ca học trống hoặc không hợp lệ." });
     }
 
     const adminDb = getAdminDb();
-
     try {
-      const resultObj = await adminDb.runTransaction(async (transaction) => {
-        // Fetch snapshot states in parallel inside transaction
+      const result = await adminDb.runTransaction(async (transaction) => {
         const lessonsSnap = await transaction.get(adminDb.collection("lessons"));
-        const existingLessons: any[] = [];
-        lessonsSnap.forEach((docSnap) => {
-          const d = docSnap.data();
-          if (d.status !== "Học viên báo nghỉ" && d.status !== "Giảng viên báo nghỉ" && d.status !== "Hủy lịch") {
-            existingLessons.push(d);
-          }
-        });
-
-        const instSnap = await transaction.get(adminDb.collection("instructors"));
-        const instructors: any[] = [];
-        instSnap.forEach((docSnap) => instructors.push(docSnap.data()));
-
-        const vehSnap = await transaction.get(adminDb.collection("vehicles"));
-        const vehicles: any[] = [];
-        vehSnap.forEach((docSnap) => vehicles.push(docSnap.data()));
-
+        const instructorsSnap = await transaction.get(adminDb.collection("instructors"));
+        const vehiclesSnap = await transaction.get(adminDb.collection("vehicles"));
         const studentsSnap = await transaction.get(adminDb.collection("students"));
+
+        const existingLessons: any[] = [];
+        const instructors: any[] = [];
+        const vehicles: any[] = [];
         const studentsMap: Record<string, any> = {};
-        studentsSnap.forEach((docSnap) => {
-          studentsMap[docSnap.id] = docSnap.data();
+
+        lessonsSnap.forEach((item) => {
+          const lesson = item.data();
+          if (!["Học viên báo nghỉ", "Giảng viên báo nghỉ", "Hủy lịch"].includes(lesson.status)) existingLessons.push(lesson);
         });
+        instructorsSnap.forEach((item) => instructors.push(item.data()));
+        vehiclesSnap.forEach((item) => vehicles.push(item.data()));
+        studentsSnap.forEach((item) => { studentsMap[item.id] = item.data(); });
 
         const conflicts: { index: number; lesson: any; reasons: string[] }[] = [];
         const validToSave: any[] = [];
 
-        // Scan proposed lessons for schedule overlaps or capability boundaries
-        for (let idx = 0; idx < lessons.length; idx++) {
-          const newL = lessons[idx];
+        lessons.forEach((newLesson, index) => {
           const reasons: string[] = [];
+          const start = timeToMinutes(newLesson.startTime);
+          const end = timeToMinutes(newLesson.endTime);
+          if (!newLesson.studentId || !newLesson.instructorId || !newLesson.vehicleId || !newLesson.date) reasons.push("Thiếu học viên, giảng viên, xe hoặc ngày học.");
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) reasons.push("Giờ kết thúc phải lớn hơn giờ bắt đầu.");
 
-          if (timeToMinutes(newL.endTime) <= timeToMinutes(newL.startTime)) {
-            reasons.push("Khung giờ bắt đầu phải kết thúc trước mốc kết thúc.");
-          }
+          const teacher = instructors.find((item) => item.id === newLesson.instructorId);
+          const vehicle = vehicles.find((item) => item.id === newLesson.vehicleId);
+          const student = studentsMap[newLesson.studentId];
 
-          const teacher = instructors.find((i) => i.id === newL.instructorId);
+          if (!student) reasons.push("Không tìm thấy học viên hợp lệ.");
+          if (!teacher) reasons.push("Không tìm thấy giảng viên hợp lệ.");
+          if (!vehicle) reasons.push("Không tìm thấy xe hợp lệ.");
+
           if (teacher) {
-            const teachStart = timeToMinutes(teacher.workingHours.start);
-            const teachEnd = timeToMinutes(teacher.workingHours.end);
-            const lessonStart = timeToMinutes(newL.startTime);
-            const lessonEnd = timeToMinutes(newL.endTime);
-
-            if (lessonStart < teachStart || lessonEnd > teachEnd) {
-              reasons.push(`Ngoài giờ hành chính của GV ${teacher.name} (${teacher.workingHours.start} - ${teacher.workingHours.end}).`);
-            }
-
-            if (teacher.daysOff && teacher.daysOff.includes(newL.date)) {
-              reasons.push(`Giảng viên ${teacher.name} có ngày nghỉ phép vào ngày ${newL.date}.`);
-            }
-
-            const lessonDateObj = new Date(newL.date);
-            let dayOfWeek = lessonDateObj.getDay();
-            if (dayOfWeek === 0) dayOfWeek = 7;
-            if (teacher.workingDays && !teacher.workingDays.includes(dayOfWeek)) {
-              reasons.push(`Giảng viên ${teacher.name} không xếp lịch Thứ ${dayOfWeek === 7 ? "Chủ Nhật" : dayOfWeek + 1}.`);
-            }
+            if (start < timeToMinutes(teacher.workingHours?.start) || end > timeToMinutes(teacher.workingHours?.end)) reasons.push(`Ngoài giờ làm việc của GV ${teacher.name}.`);
+            if (Array.isArray(teacher.daysOff) && teacher.daysOff.includes(newLesson.date)) reasons.push(`GV ${teacher.name} nghỉ phép ngày ${newLesson.date}.`);
+            if (Array.isArray(teacher.workingDays) && !teacher.workingDays.includes(getLocalWeekday(newLesson.date))) reasons.push(`GV ${teacher.name} không làm việc trong ngày đã chọn.`);
           }
 
-          const car = vehicles.find((v) => v.id === newL.vehicleId);
-          if (car && car.status !== "Sẵn sàng") {
-            reasons.push(`Xe tập ${car.name} (${car.plate}) hiện tại: ${car.status}.`);
+          if (vehicle && vehicle.status !== "Sẵn sàng") reasons.push(`Xe ${vehicle.name} (${vehicle.plate}) hiện ở trạng thái ${vehicle.status}.`);
+
+          for (const existing of [...existingLessons, ...validToSave]) {
+            if (existing.id === newLesson.id || existing.date !== newLesson.date) continue;
+            if (!doIntervalsOverlap(newLesson.startTime, newLesson.endTime, existing.startTime, existing.endTime)) continue;
+            if (existing.studentId === newLesson.studentId) reasons.push(`Học viên bị trùng lịch ${existing.startTime}-${existing.endTime}.`);
+            if (existing.instructorId === newLesson.instructorId) reasons.push(`Giảng viên bị trùng lịch ${existing.startTime}-${existing.endTime}.`);
+            if (existing.vehicleId === newLesson.vehicleId) reasons.push(`Xe bị trùng lịch ${existing.startTime}-${existing.endTime}.`);
           }
 
-          // In-memory duplicate search over stored lessons + proposed lessons processed so far
-          const allMemoryLessons = [...existingLessons, ...validToSave];
-          for (const les of allMemoryLessons) {
-            if (les.id === newL.id) continue;
-            if (les.date === newL.date) {
-              const overlap = doIntervalsOverlap(newL.startTime, newL.endTime, les.startTime, les.endTime);
-              if (overlap) {
-                if (les.studentId === newL.studentId) {
-                  const sObj = studentsMap[les.studentId];
-                  reasons.push(`Học viên ${sObj?.name || ""} có lịch tập chồng chéo trùng giờ (${les.startTime} - ${les.endTime}).`);
-                }
-                if (les.instructorId === newL.instructorId) {
-                  reasons.push(`Giảng viên ${teacher?.name || ""} có lịch giảng dạy trùng giờ (${les.startTime} - ${les.endTime}).`);
-                }
-                if (les.vehicleId === newL.vehicleId) {
-                  reasons.push(`Xe tập (${car?.plate || "Phân công"}) đã bị gán chồng lịch trong khung giờ (${les.startTime} - ${les.endTime}).`);
-                }
-              }
-            }
-          }
-
-          if (reasons.length > 0) {
-            conflicts.push({ index: idx, lesson: newL, reasons });
-          } else {
-            validToSave.push(newL);
-          }
-        }
-
-        // Action gate
-        if (conflicts.length > 0) {
-          if (user.role !== "Admin") {
-            return {
-              success: false,
-              hasConflicts: true,
-              conflicts,
-              message: "Phát hiện xung đột lịch biểu chéo. Yêu cầu tài khoản quyền Quản trị tối cao (Admin) để thực hiện áp đặt ghi đè."
-            };
-          }
-
-          if (!overrideReason) {
-            return {
-              success: false,
-              hasConflicts: true,
-              conflicts,
-              message: "Phát hiện xung đột lịch biểu chéo. Vui lòng gán lý do cưỡng chế ghi đè để lưu hồ sơ."
-            };
-          }
-        }
-
-        // Commit saving logic
-        const finalLessonsToCommit = conflicts.length > 0 ? lessons : validToSave;
-        for (const les of finalLessonsToCommit) {
-          const finalId = (les.id && !les.id.startsWith("sug_")) 
-            ? les.id 
-            : `less_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          const lessonRef = adminDb.collection("lessons").doc(finalId);
-          transaction.set(lessonRef, {
-            ...les,
-            id: finalId,
+          const normalized = {
+            ...newLesson,
+            id: newLesson.id && !String(newLesson.id).startsWith("sug_") ? newLesson.id : makeId("less"),
             status: "Đã xác nhận",
             attendanceStatus: "Chưa điểm danh",
-            resultNote: les.resultNote || ""
-          });
+            resultNote: newLesson.resultNote || ""
+          };
+
+          if (reasons.length) conflicts.push({ index, lesson: normalized, reasons: [...new Set(reasons)] });
+          else validToSave.push(normalized);
+        });
+
+        if (conflicts.length && (user.role !== "Admin" || !overrideReason)) {
+          return {
+            success: false,
+            hasConflicts: true,
+            conflicts,
+            message: user.role === "Admin"
+              ? "Phát hiện xung đột. Vui lòng nhập lý do ghi đè."
+              : "Phát hiện xung đột. Chỉ Admin được phép ghi đè."
+          };
         }
 
-        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const logRef = adminDb.collection("auditLogs").doc(logId);
+        const finalLessons = conflicts.length ? lessons.map((lesson) => ({
+          ...lesson,
+          id: lesson.id && !String(lesson.id).startsWith("sug_") ? lesson.id : makeId("less"),
+          status: "Đã xác nhận",
+          attendanceStatus: "Chưa điểm danh",
+          resultNote: lesson.resultNote || ""
+        })) : validToSave;
 
-        if (conflicts.length > 0 && overrideReason) {
-          transaction.set(logRef, {
-            id: logId,
-            timestamp: new Date().toISOString(),
-            action: "Ghi đè lịch học hàng loạt",
-            details: `Quản trị viên ${user.email} đã áp đặt cưỡng chế ghi đè lịch học hàng loạt cho ${finalLessonsToCommit.length} học viên. Lý do: ${overrideReason}. Chi tiết xung đột: ${JSON.stringify(conflicts.map(c => c.reasons).flat())}`,
-            userId: user.uid,
-            userName: user.displayName,
-            userRole: "Admin"
-          });
-        } else {
-          transaction.set(logRef, {
-            id: logId,
-            timestamp: new Date().toISOString(),
-            action: "Xếp lịch học hàng loạt",
-            details: `Lưu hàng loạt thành công ${finalLessonsToCommit.length} ca tập tự động vào thời khóa biểu.`,
-            userId: user.uid,
-            userName: user.displayName,
-            userRole: user.role
-          });
-        }
+        finalLessons.forEach((lesson) => {
+          transaction.set(adminDb.collection("lessons").doc(lesson.id), lesson);
+        });
+
+        const logId = makeId("log");
+        transaction.set(adminDb.collection("auditLogs").doc(logId), {
+          id: logId,
+          timestamp: new Date().toISOString(),
+          action: conflicts.length ? "Ghi đè lịch học hàng loạt" : "Xếp lịch học hàng loạt",
+          details: `Lưu ${finalLessons.length} ca học.${overrideReason ? ` Lý do ghi đè: ${overrideReason}` : ""}`,
+          userId: user.uid,
+          userName: user.displayName,
+          userRole: user.role
+        });
 
         return {
           success: true,
-          committedCount: finalLessonsToCommit.length,
-          hasConflicts: conflicts.length > 0
+          committedCount: finalLessons.length,
+          hasConflicts: Boolean(conflicts.length)
         };
       });
 
-      return res.json(resultObj);
+      return res.json(result);
     } catch (error: any) {
-      console.error("Giao dịch lưu loạt lịch học tập tự động thất bại:", error);
-      return res.status(500).json({ error: error.message || "Lỗi máy chủ khi lưu loạt lịch học." });
+      console.error("Lưu lịch hàng loạt thất bại:", error);
+      return res.status(409).json({ error: error.message || "Không thể lưu lịch hàng loạt." });
     }
   });
 
-  // API Endpoint to process OCR on identity cards (CCCD) / profiles
-  app.post("/api/ocr-card", async (req, res) => {
+  app.post("/api/ocr-card", checkAuthOrLocalDemo, requireRoles("Admin", "Staff"), async (req, res) => {
+    const user = req.currentUserProfile;
+    const rateKey = user.uid || req.ip || "unknown";
+    const now = Date.now();
+    const currentRate = ocrRateLimit.get(rateKey);
+
+    if (!currentRate || now - currentRate.windowStartedAt > 60_000) {
+      ocrRateLimit.set(rateKey, { count: 1, windowStartedAt: now });
+    } else {
+      currentRate.count += 1;
+      if (currentRate.count > 5) {
+        return res.status(429).json({ error: "Bạn thao tác OCR quá nhanh. Vui lòng thử lại sau một phút." });
+      }
+    }
+
     try {
       const { image, cardType } = req.body;
-      if (!image) {
-        return res.status(400).json({ error: "Không tìm thấy ảnh tải lên." });
+      const match = String(image || "").match(/^data:(image\/(?:jpeg|jpg|png|webp));base64,([A-Za-z0-9+/=]+)$/i);
+      if (!match) return res.status(400).json({ error: "Chỉ hỗ trợ ảnh JPG, PNG hoặc WEBP hợp lệ." });
+
+      const mimeType = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1].toLowerCase();
+      const base64Data = match[2];
+      if (Buffer.byteLength(base64Data, "base64") > 4 * 1024 * 1024) {
+        return res.status(413).json({ error: "Ảnh vượt quá giới hạn 4 MB." });
       }
 
-      // Lazy check endpoint-specific variable
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        return res.status(400).json({
-          error: "Yêu cầu cấu hình khóa API Gemini (GEMINI_API_KEY) trong bảng cài đặt Secrets để sử dụng chức năng AI nhận diện tự động."
-        });
-      }
-
-      const ai = getGeminiClient();
-
-      // Parse base64 and mime-type
-      const match = image.match(/^data:([^;]+);base64,(.+)$/);
-      let mimeType = "image/jpeg";
-      let base64Data = image;
-      if (match) {
-        mimeType = match[1];
-        base64Data = match[2];
-      }
-
-      const prompt = `Bạn là một mô hình AI tiện ích giúp phân tích ảnh chụp thẻ hồ sơ người dùng Việt Nam. 
-Hãy đọc ảnh và trích xuất ra các thông tin chi tiết: Họ và tên (Full name), Ngày sinh (Date of birth), và Địa chỉ thường trú (Permanent address).
-Loại ảnh đang cung cấp: ${cardType || "Ảnh CCCD"}.
-Lưu ý quy tắc đặc biệt:
-1. Đối với Họ và tên, hãy trích xuất chính xác và viết hoa đầy đủ (Ví dụ: "NGUYỄN VĂN A").
-2. Đối với Ngày sinh, hãy chuẩn hóa về định dạng YYYY-MM-DD (Ví dụ: "15/04/1998" hay "15-04-1998" -> "1998-04-15"). Nếu không có ngày sinh cụ thể, hãy cố gắng dự đoán hoặc để trống.
-3. Đối với Địa chỉ, hãy lấy địa chỉ/quê quán hoặc nơi thường trú ghi trên thẻ.
-4. Nếu ảnh là "Ảnh thẻ/Ảnh chân dung" không có văn bản hoặc không phải là thẻ định danh, hãy để trống các trường trên hoặc trả về rỗng. Tránh bịa đặt ra thông tin không có trên ảnh.`;
-
-      const response = await ai.models.generateContent({
+      const prompt = `Đọc ảnh ${String(cardType || "CCCD").slice(0, 80)} của học viên Việt Nam. Trích xuất chính xác họ tên viết hoa, ngày sinh YYYY-MM-DD và địa chỉ thường trú. Nếu không nhìn thấy dữ liệu thì để chuỗi rỗng. Không được suy đoán.`;
+      const response = await getGeminiClient().models.generateContent({
         model: "gemini-3.5-flash",
-        contents: [
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: base64Data
-            }
-          },
-          prompt
-        ],
+        contents: [{ inlineData: { mimeType, data: base64Data } }, prompt],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              fullName: {
-                type: Type.STRING,
-                description: "Họ tên học viên được viết in hoa đầy đủ."
-              },
-              address: {
-                type: Type.STRING,
-                description: "Nơi thường trú hoặc địa chỉ hiện thị trên thẻ học viên."
-              },
-              dob: {
-                type: Type.STRING,
-                description: "Ngày sinh định dạng chuẩn YYYY-MM-DD. Ví dụ: '1998-10-15'."
-              }
+              fullName: { type: Type.STRING },
+              address: { type: Type.STRING },
+              dob: { type: Type.STRING }
             },
             required: ["fullName", "address", "dob"]
           }
         }
       });
 
-      const extractedText = response.text || "{}";
-      const data = JSON.parse(extractedText.trim());
-
-      return res.json({
-        success: true,
-        data: data
-      });
+      return res.json({ success: true, data: JSON.parse((response.text || "{}").trim()) });
     } catch (error: any) {
-      console.error("Gemini OCR server error: ", error);
-      return res.status(500).json({
-        success: false,
-        error: error.message || "Xảy ra sự cố bất ngờ khi xử lý hình ảnh chụp bằng AI."
-      });
+      console.error("Gemini OCR server error:", error);
+      return res.status(500).json({ success: false, error: error.message || "Không thể xử lý ảnh." });
     }
   });
 
-  // Vite development middleware vs Static serve
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
+    app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Express server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+    console.log(`Express server running on port ${PORT}`);
   });
 }
 

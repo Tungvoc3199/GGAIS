@@ -405,7 +405,7 @@ export const Settings: React.FC = () => {
 
         {/* Action button triggers */}
         <div className="flex justify-between items-center pt-3 border-t border-slate-100 gap-3">
-          {currentUser?.role === 'Admin' && (
+          {currentUser?.role === 'Admin' && ((import.meta as any).env.DEV === true || String((import.meta as any).env.VITE_ENABLE_DEMO_MODE) === "true") && (
             <button
               type="button"
               onClick={handleResetData}

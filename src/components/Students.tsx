@@ -59,6 +59,7 @@ export const Students: React.FC<StudentsProps> = ({
     addStudent,
     updateStudent,
     deleteStudent,
+    archiveStudent,
     addPayment,
     addAuditLog
   } = useDatabase();
@@ -75,6 +76,130 @@ export const Students: React.FC<StudentsProps> = ({
   // Detail View State
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'info' | 'progress' | 'schedule' | 'fee' | 'notes' | 'notif'>('info');
+
+  // Search & Filtering extra states
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Student Edit States
+  const [isEditingStudent, setIsEditingStudent] = useState(false);
+  const [editForm, setEditForm] = useState<Partial<Student>>({});
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editSuccessMsg, setEditSuccessMsg] = useState<string | null>(null);
+
+  // Student Delete States
+  const [deleteTargetStudent, setDeleteTargetStudent] = useState<Student | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeletingStudent, setIsDeletingStudent] = useState(false);
+  const [deleteSuccessMsg, setDeleteSuccessMsg] = useState<string | null>(null);
+
+  const openEditStudent = () => {
+    if (!selectedStudent) return;
+    setEditForm({
+      name: selectedStudent.name,
+      phone: selectedStudent.phone,
+      dob: selectedStudent.dob,
+      address: selectedStudent.address,
+      licenseClass: selectedStudent.licenseClass,
+      courseType: selectedStudent.courseType,
+      totalFee: selectedStudent.totalFee,
+      totalSessions: selectedStudent.totalSessions,
+      nextPaymentDeadline: selectedStudent.nextPaymentDeadline,
+      status: selectedStudent.status,
+      assignedInstructorId: selectedStudent.assignedInstructorId,
+      assignedVehicleId: selectedStudent.assignedVehicleId,
+      notes: selectedStudent.notes
+    });
+    setEditError(null);
+    setEditSuccessMsg(null);
+    setIsEditingStudent(true);
+  };
+
+  const handleSaveStudent = async () => {
+    if (!selectedStudent) return;
+    setEditError(null);
+    setEditSuccessMsg(null);
+
+    // Validate
+    if (!editForm.name || !editForm.name.trim()) {
+      setEditError('Họ và tên không được để trống.');
+      return;
+    }
+    if (!editForm.phone || !editForm.phone.trim()) {
+      setEditError('Số điện thoại không được để trống.');
+      return;
+    }
+    const feeVal = Number(editForm.totalFee);
+    if (isNaN(feeVal) || feeVal < 0) {
+      setEditError('Tổng học phí phải lớn hơn hoặc bằng 0.');
+      return;
+    }
+    const sessionsVal = Number(editForm.totalSessions);
+    if (isNaN(sessionsVal) || sessionsVal < (selectedStudent.completedSessions || 0)) {
+      setEditError(`Tổng số buổi học không được nhỏ hơn số buổi đã hoàn thành (${selectedStudent.completedSessions || 0}).`);
+      return;
+    }
+
+    setIsSavingStudent(true);
+    try {
+      const res = await updateStudent(selectedStudent.id, {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        dob: editForm.dob || '',
+        address: editForm.address || '',
+        licenseClass: editForm.licenseClass || '',
+        courseType: editForm.courseType || '',
+        totalFee: feeVal,
+        totalSessions: sessionsVal,
+        nextPaymentDeadline: editForm.nextPaymentDeadline || '',
+        status: editForm.status as any || 'Mới đăng ký',
+        assignedInstructorId: editForm.assignedInstructorId || '',
+        assignedVehicleId: editForm.assignedVehicleId || '',
+        notes: editForm.notes || ''
+      });
+
+      if (res && res.success) {
+        setIsEditingStudent(false);
+        setDeleteSuccessMsg('Cập nhật hồ sơ học viên thành công!');
+        setTimeout(() => setDeleteSuccessMsg(null), 3500);
+      } else {
+        setEditError(res?.error || 'Có lỗi xảy ra khi cập nhật hồ sơ.');
+      }
+    } catch (err: any) {
+      console.error('Lỗi khi lưu học viên:', err);
+      setEditError(err.message || String(err));
+    } finally {
+      setIsSavingStudent(false);
+    }
+  };
+
+  const handleDeleteStudent = async () => {
+    if (!deleteTargetStudent) return;
+    setDeleteError('');
+    if (deleteConfirmText !== 'XOA') {
+      setDeleteError('Vui lòng nhập đúng chữ XOA để xác nhận.');
+      return;
+    }
+
+    setIsDeletingStudent(true);
+    try {
+      const res = await deleteStudent(deleteTargetStudent.id);
+      if (res && res.success) {
+        setDeleteTargetStudent(null);
+        setSelectedStudentId(null);
+        setDeleteSuccessMsg('Đã xóa học viên thành công!');
+        setTimeout(() => setDeleteSuccessMsg(null), 3500);
+      } else {
+        setDeleteError(res?.error || 'Có lỗi xảy ra trong quá trình xóa.');
+      }
+    } catch (err: any) {
+      console.error('Lỗi khi xóa học viên:', err);
+      setDeleteError(err.message || String(err));
+    } finally {
+      setIsDeletingStudent(false);
+    }
+  };
 
   // Listen to Global Student focus request
   useEffect(() => {
@@ -262,7 +387,10 @@ export const Students: React.FC<StudentsProps> = ({
     // Tag filter
     const matchTag = filterTag === 'all' || (s.tags && s.tags.includes(filterTag));
 
-    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag;
+    // Archiving filter: Hide if showArchived is false and isArchived is true.
+    const matchArchived = showArchived ? true : !s.isArchived;
+
+    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag && matchArchived;
   });
 
   const handleOcrUpload = async (e: React.ChangeEvent<HTMLInputElement>, cardType: 'cccd' | 'avatar' | 'eid') => {
@@ -594,6 +722,16 @@ export const Students: React.FC<StudentsProps> = ({
             <span>Dừng học &gt; 7 ngày</span>
           </label>
 
+          <label className="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+            />
+            <span>Hiển thị học viên đã lưu trữ</span>
+          </label>
+
           <div className="flex items-center gap-1.5 ml-auto text-[11px] text-slate-400 font-medium">
             <span>Dùng checkbox bộ chọn tối ưu</span>
           </div>
@@ -777,12 +915,23 @@ export const Students: React.FC<StudentsProps> = ({
                   )}
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedStudentId(null)}
-                className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                <X className="h-5.5 w-5.5" />
-              </button>
+              <div className="flex items-center gap-2">
+                {(currentUser?.role === 'Admin' || currentUser?.role === 'Staff') && (
+                  <button
+                    type="button"
+                    onClick={openEditStudent}
+                    className="min-h-[44px] px-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold cursor-pointer flex items-center gap-1 shadow-sm transition-all animate-fade-in"
+                  >
+                    <span>✎</span> Chỉnh sửa
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedStudentId(null)}
+                  className="p-1.5 rounded-full hover:bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="h-5.5 w-5.5" />
+                </button>
+              </div>
             </div>
 
             {/* Navigation Tabs */}
@@ -834,7 +983,7 @@ export const Students: React.FC<StudentsProps> = ({
             )}
 
             {/* Dynamic Content Panel */}
-            <div className="p-5 overflow-y-auto flex-1 space-y-5 bg-slate-50/20">
+            <div className="p-5 pb-28 md:pb-5 overflow-y-auto flex-1 space-y-5 bg-slate-50/20">
               
               {/* TAB 1: THÔNG TIN CHI TIẾT */}
               {activeTab === 'info' && (
@@ -961,6 +1110,47 @@ export const Students: React.FC<StudentsProps> = ({
                       </button>
                     </div>
                   </div>
+
+                  {currentUser?.role === 'Admin' && (
+                    <div className="bg-white p-5 rounded-2xl border border-slate-150 space-y-4 shadow-sm animate-fade-in text-xs">
+                      <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-wider pb-2 border-b border-slate-100 flex items-center gap-1.5">
+                        <span>⚙️</span> THAO TÁC QUẢN TRỊ
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setIsSavingStudent(true);
+                            const res = await archiveStudent(selectedStudent.id);
+                            setIsSavingStudent(false);
+                            if (res && res.success) {
+                              setSelectedStudentId(null);
+                              setDeleteSuccessMsg('Lưu trữ học viên và chuyển sang Tạm dừng thành công!');
+                              setTimeout(() => setDeleteSuccessMsg(null), 3500);
+                            } else {
+                              alert(res && res.error ? res.error : 'Có lỗi phát sinh khi lưu trữ.');
+                            }
+                          }}
+                          disabled={isSavingStudent}
+                          className="min-h-[44px] cursor-pointer bg-slate-500 hover:bg-slate-650 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all w-full shadow-xs disabled:opacity-50"
+                        >
+                          <span>📦</span> {isSavingStudent ? 'Đang xử lý...' : 'Lưu trữ học viên'}
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setDeleteTargetStudent(selectedStudent);
+                            setDeleteConfirmText('');
+                            setDeleteError('');
+                          }}
+                          className="min-h-[44px] cursor-pointer bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all w-full shadow-xs"
+                        >
+                          <span>🗑</span> Xóa vĩnh viễn
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Photocopies of Identification documents and interactive zoom preview */}
                   <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-3.5 shadow-xs animate-fade-in text-xs">
@@ -1137,22 +1327,7 @@ export const Students: React.FC<StudentsProps> = ({
                     </div>
                   </div>
 
-                  {currentUser?.role === 'Admin' && (
-                    <div className="pt-4 flex justify-between">
-                      <button
-                        onClick={() => {
-                          const conf = window.confirm(`Bạn có chắc chắn muốn xóa vĩnh viễn Hồ sơ học viên: ${selectedStudent.name}?`);
-                          if (conf) {
-                            deleteStudent(selectedStudent.id);
-                            setSelectedStudentId(null);
-                          }
-                        }}
-                        className="bg-red-50 border border-red-200 text-red-600 px-3 py-2 rounded-xl text-xs font-bold hover:bg-red-100 cursor-pointer flex items-center gap-1 transition-all"
-                      >
-                        <Trash2 className="h-4 w-4" /> Xóa học viên khỏi hệ thống
-                      </button>
-                    </div>
-                  )}
+
                 </div>
               )}
 
@@ -2039,6 +2214,285 @@ export const Students: React.FC<StudentsProps> = ({
             >
               <X className="h-4 w-4" /> ĐÓNG
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* 🔔 SUCCESS FLOATING TOAST NOTIFICATION */}
+      {deleteSuccessMsg && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 bg-emerald-600 border border-emerald-500 text-white font-extrabold text-xs px-5 py-3.5 rounded-2xl shadow-xl z-[120] flex items-center gap-2 animate-bounce">
+          <span>✅</span>
+          <span>{deleteSuccessMsg}</span>
+        </div>
+      )}
+
+      {/* ✎ EDIT STUDENT PROFILE MODAL */}
+      {isEditingStudent && (
+        <div className="fixed inset-0 bg-slate-950/70 z-[100] backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl animate-zoom-in max-h-[90vh] overflow-y-auto border border-slate-100 flex flex-col">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 sticky top-0 z-10 shrink-0">
+              <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                <span>✎</span> Chỉnh sửa hồ sơ học viên
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsEditingStudent(false)}
+                className="p-1.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Error Display */}
+            {editError && (
+              <div className="mx-5 mt-4 p-3.5 bg-red-50 border border-red-100 rounded-2xl text-red-700 text-xs font-bold leading-relaxed animate-fade-in">
+                ⚠️ {editError}
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="p-5 space-y-4 flex-1">
+              {/* Họ & tên */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Họ và tên *</label>
+                <input
+                  type="text"
+                  value={editForm.name || ''}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Nguyễn Văn A"
+                />
+              </div>
+
+              {/* Điện thoại & Ngày sinh */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Điện thoại *</label>
+                  <input
+                    type="text"
+                    value={editForm.phone || ''}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="0912345678"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Ngày sinh</label>
+                  <input
+                    type="date"
+                    value={editForm.dob || ''}
+                    onChange={(e) => setEditForm({ ...editForm, dob: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Địa chỉ */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Địa chỉ liên lạc</label>
+                <input
+                  type="text"
+                  value={editForm.address || ''}
+                  onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Hà Nội, Việt Nam"
+                />
+              </div>
+
+              {/* Hạng bằng & Khóa học */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Hạng bằng</label>
+                  <select
+                    value={editForm.licenseClass || ''}
+                    onChange={(e) => setEditForm({ ...editForm, licenseClass: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {['B số sàn', 'B số tự động', 'C1', 'A1', 'A', 'C', 'D', 'E'].map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Khóa học</label>
+                  <select
+                    value={editForm.courseType || ''}
+                    onChange={(e) => setEditForm({ ...editForm, courseType: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {settings.courseTypes?.map(ct => (
+                      <option key={ct} value={ct}>{ct}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Tổng học phí & Tổng số buổi */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Tổng học phí (đ)</label>
+                  <input
+                    type="number"
+                    value={editForm.totalFee ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, totalFee: e.target.value === '' ? 0 : Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Tổng số buổi học</label>
+                  <input
+                    type="number"
+                    value={editForm.totalSessions ?? ''}
+                    onChange={(e) => setEditForm({ ...editForm, totalSessions: e.target.value === '' ? 0 : Number(e.target.value) })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Hạn thanh toán & Trạng thái */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Hạn nộp tiền tiếp</label>
+                  <input
+                    type="date"
+                    value={editForm.nextPaymentDeadline || ''}
+                    onChange={(e) => setEditForm({ ...editForm, nextPaymentDeadline: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Trạng thái học tập</label>
+                  <select
+                    value={editForm.status || ''}
+                    onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    {['Danh sách chờ', 'Mới đăng ký', 'Đang học', 'Tạm dừng', 'Đã hoàn thành', 'Đã thi'].map(st => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Giáo viên & Xe tập */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Giảng viên phụ trách</label>
+                  <select
+                    value={editForm.assignedInstructorId || ''}
+                    onChange={(e) => setEditForm({ ...editForm, assignedInstructorId: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">-- Chưa điều phối --</option>
+                    {instructors.map(i => (
+                      <option key={i.id} value={i.id}>{i.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Xe tập gán riêng</label>
+                  <select
+                    value={editForm.assignedVehicleId || ''}
+                    onChange={(e) => setEditForm({ ...editForm, assignedVehicleId: e.target.value })}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">-- Chưa gán xe --</option>
+                    {vehicles.map(v => (
+                      <option key={v.id} value={v.id}>{v.name} ({v.plate})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Ghi chú */}
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase tracking-wider text-slate-400">Ghi chú nội bộ</label>
+                <textarea
+                  rows={2}
+                  value={editForm.notes || ''}
+                  onChange={(e) => setEditForm({ ...editForm, notes: e.target.value })}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  placeholder="Các lưu ý đặc biệt về học viên..."
+                />
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-5 border-t border-slate-100 flex justify-end gap-3 bg-slate-50 sticky bottom-0 z-10 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsEditingStudent(false)}
+                className="bg-white border border-slate-200 text-slate-550 font-bold text-xs px-4 py-2.5 rounded-xl hover:bg-slate-55 cursor-pointer transition-all"
+              >
+                HỦY BỎ
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveStudent}
+                disabled={isSavingStudent}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-5 py-2.5 rounded-xl cursor-pointer shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isSavingStudent ? 'ĐANG LƯU...' : 'LƯU THAY ĐỔI'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🗑 DETAILED DELETE CONFIRMATION MODAL */}
+      {deleteTargetStudent && (
+        <div className="fixed inset-0 bg-slate-950/80 z-[110] backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-red-55 p-6 space-y-4 animate-scale-up">
+            <div className="flex items-start gap-3">
+              <div className="bg-red-100 p-2.5 rounded-2xl text-red-650">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <div className="space-y-1 flex-1">
+                <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Xác nhận xóa học viên</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  Thao tác này sẽ xóa vĩnh viễn hồ sơ của học viên <strong>{deleteTargetStudent.name}</strong> ({deleteTargetStudent.code}) khỏi cơ sở dữ liệu và không thể khôi phục lại.
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 p-3 rounded-2xl border border-red-100 text-[11px] text-red-700 font-bold leading-relaxed">
+              ⚠️ Thao tác này không thể hoàn tác. Hãy nhập chính xác chữ <span className="underline decoration-wavy font-black text-rose-800">XOA</span> dưới đây để tiếp tục xóa vĩnh viễn.
+            </div>
+
+            {deleteError && (
+              <div className="p-3 bg-rose-100 rounded-2xl border border-rose-200 text-[11px] text-red-800 font-black leading-relaxed">
+                {deleteError}
+              </div>
+            )}
+
+            <div className="space-y-2.5">
+              <input
+                type="text"
+                placeholder="Nhập chữ XOA để xác thực"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-center text-slate-900 font-black tracking-widest placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-red-500 uppercase"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetStudent(null)}
+                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-650 font-black text-xs py-3 rounded-xl cursor-pointer transition-all"
+              >
+                HỦY BỎ
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteStudent}
+                disabled={deleteConfirmText !== 'XOA' || isDeletingStudent}
+                className="flex-1 bg-red-600 hover:bg-red-750 text-white font-black text-xs py-3 rounded-xl cursor-pointer shadow-md transition-all flex items-center justify-center gap-1.5 disabled:opacity-55 disabled:cursor-not-allowed"
+              >
+                {isDeletingStudent ? 'ĐANG XÓA...' : 'XÓA VĨNH VIỄN'}
+              </button>
+            </div>
           </div>
         </div>
       )}

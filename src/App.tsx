@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 
 function AppContent() {
-  const { currentUser, logout, settings, isFirebase } = useDatabase();
+  const { currentUser, logout, settings, isFirebase, cloudConnectionError, authReady } = useDatabase();
 
   // Navigation views state
   const [activeView, setActiveView] = useState<string>('tong-quan');
@@ -97,10 +97,17 @@ function AppContent() {
             </div>
 
             {isFirebase ? (
-              <div className="bg-emerald-950/30 border border-emerald-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[10px] text-emerald-400 font-extrabold select-none">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                <span className="truncate">CLOUD FIRESTORE SYNC</span>
-              </div>
+              isFirebase === true && cloudConnectionError === null && authReady === true ? (
+                <div className="bg-emerald-950/30 border border-emerald-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[10px] text-emerald-400 font-extrabold select-none">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  <span className="truncate">CLOUD FIRESTORE SYNC</span>
+                </div>
+              ) : (
+                <div className="bg-rose-950/30 border border-rose-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[10px] text-rose-400 font-extrabold select-none">
+                  <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+                  <span className="truncate">CLOUD ERROR</span>
+                </div>
+              )
             ) : (
               <div className="bg-amber-950/30 border border-amber-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[10px] text-amber-500 font-extrabold select-none">
                 <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
@@ -228,10 +235,17 @@ function AppContent() {
 
               {/* Status Info */}
               {isFirebase ? (
-                <div className="bg-emerald-950/30 border border-emerald-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[9px] text-emerald-400 font-extrabold select-none">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-                  <span className="truncate">CLOUD FIRESTORE SYNC</span>
-                </div>
+                isFirebase === true && cloudConnectionError === null && authReady === true ? (
+                  <div className="bg-emerald-950/30 border border-emerald-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[9px] text-emerald-400 font-extrabold select-none">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                    <span className="truncate">CLOUD FIRESTORE SYNC</span>
+                  </div>
+                ) : (
+                  <div className="bg-rose-950/30 border border-rose-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[9px] text-rose-400 font-extrabold select-none">
+                    <span className="h-1.5 w-1.5 rounded-full bg-rose-400 animate-pulse shrink-0" />
+                    <span className="truncate">CLOUD ERROR</span>
+                  </div>
+                )
               ) : (
                 <div className="bg-amber-950/30 border border-amber-900/50 py-1.5 px-3 rounded-xl flex items-center gap-2 text-[9px] text-amber-500 font-extrabold select-none">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
@@ -329,6 +343,18 @@ function AppContent() {
 
       {/* MAIN VIEW CONTROLLER CANVAS */}
       <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-6 pb-20 md:pb-6 relative">
+        {isFirebase && cloudConnectionError && (
+          <div className="mb-4 rounded-2xl bg-red-650 text-white p-4 flex flex-col items-start gap-2.5 shadow-md border border-red-700 bg-gradient-to-r from-red-600 to-red-750 select-none">
+            <div className="flex items-center gap-3">
+              <span className="text-xl">⚠️</span>
+              <div className="text-xs font-bold leading-relaxed">
+                <span className="block font-black text-xs uppercase tracking-wide">KHÔNG THỂ ĐỒNG BỘ CLOUD — VUI LÒNG KIỂM TRA KẾT NỐI. KHÔNG NHẬP DỮ LIỆU.</span>
+                <span className="text-red-100 font-medium block mt-1">{cloudConnectionError}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {!isFirebase && (
           <div className="mb-4 rounded-2xl bg-red-650 text-white p-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm border border-red-700 bg-gradient-to-r from-red-600 to-red-750 select-none">
             <div className="flex items-center gap-2.5">

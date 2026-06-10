@@ -42,6 +42,9 @@ export interface Student {
   cccdImage?: string;
   avatarImage?: string;
   eidImage?: string;
+  isArchived?: boolean;
+  archivedAt?: string;
+  archivedBy?: string;
 }
 
 export interface Instructor {

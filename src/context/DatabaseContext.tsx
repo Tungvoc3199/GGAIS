@@ -67,6 +67,7 @@ interface DatabaseContextType {
   authReady: boolean;
   isSubmittingLogin: boolean;
   dataLoading: boolean;
+  cloudConnectionError: string | null;
   students: Student[];
   instructors: Instructor[];
   vehicles: Vehicle[];
@@ -80,8 +81,9 @@ interface DatabaseContextType {
   toggleDatabaseMode: (preferLocal: boolean) => void;
   // Student Actions
   addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => void;
-  updateStudent: (id: string, updated: Partial<Student>) => void;
-  deleteStudent: (id: string) => void;
+  updateStudent: (id: string, updated: Partial<Student>) => Promise<{ success: boolean; error?: string }>;
+  deleteStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
+  archiveStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   // Lesson Actions
   addLesson: (lesson: Omit<Lesson, 'id'>) => { success: boolean; error?: string };
   updateLesson: (id: string, updated: Partial<Lesson>) => { success: boolean; error?: string };
@@ -142,6 +144,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [authReady, setAuthReady] = useState(false);
   const [isSubmittingLogin, setIsSubmittingLogin] = useState(false);
   const [dataLoading, setDataLoading] = useState(false);
+  const [cloudConnectionError, setCloudConnectionError] = useState<string | null>(null);
 
   const loading = isSubmittingLogin || dataLoading;
 
@@ -205,6 +208,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const loadFirestoreData = async () => {
+    setCloudConnectionError(null);
     setDataLoading(true);
     try {
       // Safe wrapper to fetch individual tables without failing the entire bootstrap
@@ -245,9 +249,14 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setPayments(pPayments);
       setAuditLogs(pLogs);
       if (pSettings) setSettings(pSettings);
-    } catch (err) {
-      console.error('Lỗi khi tải dữ liệu từ Firestore, chuyển sang bộ nhớ tạm:', err);
-      loadDataFromLocalStorage();
+    } catch (err: any) {
+      console.error('Lỗi khi tải dữ liệu từ Firestore:', err);
+      setCloudConnectionError(err.message || String(err));
+      setStudents([]);
+      setInstructors([]);
+      setVehicles([]);
+      setLessons([]);
+      setPayments([]);
     } finally {
       setDataLoading(false);
     }
@@ -268,8 +277,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const timer = setTimeout(() => {
       if (!resolved) {
         resolved = true;
-        console.warn('Firebase Auth onAuthStateChanged timed out after 5000ms. Falling back to localized local states but allowing future login submissions.');
-        loadDataFromLocalStorage();
+        console.warn('Firebase Auth onAuthStateChanged timed out after 5000ms. Keep empty arrays and show error.');
+        setCloudConnectionError('Kết nối Firebase Auth quá hạn (5 giây). Vui lòng kiểm tra mạng.');
         setAuthReady(true);
         setAuthInitialized(true);
       }
@@ -287,7 +296,12 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               setCurrentUser(null);
               localStorage.removeItem('lhp_user');
             }
-            loadDataFromLocalStorage();
+            // Keep arrays empty
+            setStudents([]);
+            setInstructors([]);
+            setVehicles([]);
+            setLessons([]);
+            setPayments([]);
             if (!authInitialized) {
               setAuthInitialized(true);
             }
@@ -314,7 +328,13 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           }
         } catch (err: any) {
           console.error('Lỗi khởi tạo session:', err);
-          loadDataFromLocalStorage();
+          setCloudConnectionError(err.message || String(err));
+          // Keep arrays empty
+          setStudents([]);
+          setInstructors([]);
+          setVehicles([]);
+          setLessons([]);
+          setPayments([]);
         } finally {
           resolved = true;
           clearTimeout(timer);
@@ -327,7 +347,12 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
-          loadDataFromLocalStorage();
+          setCloudConnectionError('Lỗi kết nối Firebase Auth: ' + (error.message || String(error)));
+          setStudents([]);
+          setInstructors([]);
+          setVehicles([]);
+          setLessons([]);
+          setPayments([]);
           setAuthInitialized(true);
           setAuthReady(true);
         }
@@ -386,46 +411,46 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Keep local storage synchronized for fallback
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_students', JSON.stringify(students));
     }
-  }, [students, authInitialized]);
+  }, [students, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_instructors', JSON.stringify(instructors));
     }
-  }, [instructors, authInitialized]);
+  }, [instructors, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_vehicles', JSON.stringify(vehicles));
     }
-  }, [vehicles, authInitialized]);
+  }, [vehicles, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_lessons', JSON.stringify(lessons));
     }
-  }, [lessons, authInitialized]);
+  }, [lessons, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_payments', JSON.stringify(payments));
     }
-  }, [payments, authInitialized]);
+  }, [payments, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_settings', JSON.stringify(settings));
     }
-  }, [settings, authInitialized]);
+  }, [settings, authInitialized, isFirebase]);
 
   useEffect(() => {
-    if (authInitialized) {
+    if (authInitialized && !isFirebase) {
       localStorage.setItem('lhp_audit_logs', JSON.stringify(auditLogs));
     }
-  }, [auditLogs, authInitialized]);
+  }, [auditLogs, authInitialized, isFirebase]);
 
 
   // Logging action helper
@@ -591,6 +616,12 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await addAuditLog('Khôi phục dữ liệu', 'Bắt đầu quá trình nén và mồi phục dọn dữ liệu mẫu từ quản trị viên.');
 
     if (isFirebase) {
+      const isDevMode = (import.meta as any).env.DEV === true || String((import.meta as any).env.VITE_ENABLE_DEMO_MODE) === "true";
+      if (!isDevMode) {
+        safeAlert('Tính năng nạp dữ liệu demo bị khóa trên môi trường Production Cloud!');
+        setDataLoading(false);
+        return;
+      }
       try {
         await runDataSeedingPrimes();
         // Force refetch
@@ -704,54 +735,82 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await addAuditLog('Thêm học viên mới', `Đăng ký thành công học viên: ${newS.name} (${code}) khóa học ${newS.courseType}.`);
   };
 
-  const updateStudent = async (id: string, updated: Partial<Student>) => {
-    let mergedStudent: Student | undefined;
+  const updateStudent = async (id: string, updated: Partial<Student>): Promise<{ success: boolean; error?: string }> => {
+    const sObj = students.find(s => s.id === id);
+    if (!sObj) {
+      return { success: false, error: 'Không tìm thấy học viên trong hệ thống.' };
+    }
+
+    const mergedStudent = { ...sObj, ...updated };
+    mergedStudent.remainingAmount = Math.max(0, mergedStudent.totalFee - mergedStudent.paidAmount);
+    mergedStudent.remainingSessions = Math.max(0, mergedStudent.totalSessions - mergedStudent.completedSessions);
+
+    if (isFirebase) {
+      try {
+        await saveStudentDoc(mergedStudent);
+      } catch (err: any) {
+        console.error('Lỗi updateStudent Firestore:', err);
+        return { success: false, error: 'Lỗi lưu dữ liệu lên Cloud Firestore: ' + (err.message || String(err)) };
+      }
+    }
 
     setStudents(prev => prev.map(s => {
       if (s.id === id) {
-        const after = { ...s, ...updated };
-        after.remainingAmount = Math.max(0, after.totalFee - after.paidAmount);
-        after.remainingSessions = Math.max(0, after.totalSessions - after.completedSessions);
-        mergedStudent = after;
-        return after;
+        return mergedStudent;
       }
       return s;
     }));
 
-    if (isFirebase) {
-      setTimeout(async () => {
-        if (mergedStudent) {
-          try {
-            await saveStudentDoc(mergedStudent);
-          } catch (err) {
-            console.error('Lỗi updateStudent Firestore:', err);
-          }
-        }
-      }, 0);
-    }
-
-    const sName = mergedStudent?.name || id;
-    await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${sName}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${mergedStudent.name}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    return { success: true };
   };
 
-  const deleteStudent = async (id: string) => {
+  const deleteStudent = async (id: string): Promise<{ success: boolean; error?: string }> => {
     if (currentUser?.role !== 'Admin') {
-      safeAlert('Chỉ quản trị tối cao mới có đặc quyền xóa hoàn toàn hồ sơ học viên.');
-      return;
+      return { success: false, error: 'Chỉ quản trị tối cao mới có đặc quyền xóa hoàn toàn hồ sơ học viên.' };
     }
 
     const sObj = students.find(s => s.id === id);
-    setStudents(prev => prev.filter(s => s.id !== id));
+    if (!sObj) {
+      return { success: false, error: 'Không tìm thấy học viên trong hệ thống.' };
+    }
+
+    const hasLessons = lessons.some(l => l.studentId === id);
+    const hasPayments = payments.some(p => p.studentId === id);
+
+    if (hasLessons || hasPayments) {
+      return {
+        success: false,
+        error: 'Không thể xóa vì học viên đã có lịch học hoặc biên lai. Hãy dùng chức năng Lưu trữ.'
+      };
+    }
 
     if (isFirebase) {
       try {
         await deleteStudentDoc(id);
-      } catch (err) {
+      } catch (err: any) {
         console.error('Lỗi xóa học viên trong Firestore:', err);
+        return { success: false, error: 'Lỗi xóa trên Cloud Firestore: ' + (err.message || String(err)) };
       }
     }
 
-    await addAuditLog('Xóa học viên', `Đã xóa học viên ${sObj?.name || id} ra khỏi hồ sơ lưu trữ chính.`);
+    setStudents(prev => prev.filter(s => s.id !== id));
+
+    await addAuditLog('Xóa học viên', `Đã xóa học viên ${sObj.name} ra khỏi hồ sơ lưu trữ chính.`);
+    return { success: true };
+  };
+
+  const archiveStudent = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    if (currentUser?.role !== 'Admin') {
+      return { success: false, error: 'Chỉ quản trị tối cao mới có đặc quyền lưu trữ học viên.' };
+    }
+
+    return await updateStudent(id, {
+      isArchived: true,
+      archivedAt: new Date().toISOString(),
+      archivedBy: currentUser?.email || '',
+      status: 'Tạm dừng'
+    });
   };
 
   // --- LESSON ACTIONS ---
@@ -1143,6 +1202,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         authReady,
         isSubmittingLogin,
         dataLoading,
+        cloudConnectionError,
         students,
         instructors,
         vehicles,
@@ -1157,6 +1217,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addStudent,
         updateStudent,
         deleteStudent,
+        archiveStudent,
         addLesson,
         updateLesson,
         cancelLesson,

@@ -30,6 +30,26 @@ export const isFirebaseConfigured = (): boolean => {
   );
 };
 
+let cloudReloadScheduled = false;
+
+function scheduleCloudReload(): void {
+  if (typeof window === 'undefined' || cloudReloadScheduled) return;
+  cloudReloadScheduled = true;
+  window.setTimeout(() => window.location.reload(), 150);
+}
+
+function handleSecureMutationFailure(label: string, error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`${label}:`, error);
+
+  if (typeof window !== 'undefined') {
+    window.alert(`${label}: ${message}\nDữ liệu sẽ được tải lại từ Cloud để tránh hiển thị sai.`);
+    scheduleCloudReload();
+  }
+
+  throw error instanceof Error ? error : new Error(message);
+}
+
 async function listCollection<T>(collectionName: string): Promise<T[]> {
   if (!isFirebaseConfigured()) return [];
   try {
@@ -145,10 +165,12 @@ async function flushAutoLessonQueue(): Promise<void> {
     );
 
     if (!result.success) {
-      console.error('Batch scheduling rejected:', result.message, result.conflicts);
+      throw new Error(result.message || 'Server từ chối lưu lịch tự động do có xung đột.');
     }
+
+    scheduleCloudReload();
   } catch (error) {
-    console.error('Batch scheduling API failed:', error);
+    handleSecureMutationFailure('Không thể lưu lịch tự động', error);
   }
 }
 
@@ -165,12 +187,24 @@ export async function saveLessonDoc(lesson: Lesson): Promise<void> {
     return;
   }
 
-  await secureApiPost('/api/lessons/save', { lesson });
+  try {
+    const result = await secureApiPost<{ success: boolean; message?: string }>('/api/lessons/save', { lesson });
+    if (!result.success) throw new Error(result.message || 'Server từ chối lưu ca học.');
+    scheduleCloudReload();
+  } catch (error) {
+    handleSecureMutationFailure('Không thể lưu ca học', error);
+  }
 }
 
 export async function deleteLessonDoc(id: string): Promise<void> {
   if (!isFirebaseConfigured()) return;
-  await secureApiPost('/api/lessons/delete', { lessonId: id });
+
+  try {
+    await secureApiPost('/api/lessons/delete', { lessonId: id });
+    scheduleCloudReload();
+  } catch (error) {
+    handleSecureMutationFailure('Không thể xóa ca học', error);
+  }
 }
 
 // --- PAYMENTS ---
@@ -184,7 +218,6 @@ export async function fetchPayments(): Promise<Payment[]> {
  */
 export async function savePaymentDoc(payment: Payment): Promise<void> {
   if (!isFirebaseConfigured()) return;
-  const path = `payments/${payment.id}`;
 
   try {
     const existingDoc = await getDoc(doc(db, 'payments', payment.id));
@@ -200,6 +233,7 @@ export async function savePaymentDoc(payment: Payment): Promise<void> {
         receiver: payment.receiver,
         notes: payment.notes
       });
+      scheduleCloudReload();
       return;
     }
 
@@ -210,6 +244,7 @@ export async function savePaymentDoc(payment: Payment): Promise<void> {
         paymentId: payment.id,
         reason: payment.cancellationReason || 'Hủy phiếu từ giao diện quản lý'
       });
+      scheduleCloudReload();
       return;
     }
 
@@ -217,10 +252,10 @@ export async function savePaymentDoc(payment: Payment): Promise<void> {
       await secureApiPost('/api/payments/approve', {
         paymentId: payment.id
       });
+      scheduleCloudReload();
     }
   } catch (error) {
-    console.error('Secure payment mutation failed:', error);
-    handleFirestoreError(error, OperationType.WRITE, path);
+    handleSecureMutationFailure('Không thể đồng bộ phiếu thu', error);
   }
 }
 

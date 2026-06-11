@@ -1,12 +1,27 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    // TODO SECURITY: Before production, restrict CCCD and EID read/write to Admin and Staff roles only. Avatar permissions may be handled separately.
+    function signedIn() {
+      return request.auth != null;
+    }
+    function validStudentId(studentId) {
+      return studentId.matches('^[a-zA-Z0-9_-]{1,128}$');
+    }
+    function validImageUpload() {
+      return request.resource.size < 4 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
     match /students/{studentId}/{kind}/{fileName} {
-      allow read, write: if request.auth != null
+      // TODO SECURITY: Before production, restrict CCCD and EID access
+      // to Admin and Staff roles using firestore.get() role lookup.
+      // Avatar permissions may be handled separately.
+      allow read: if signedIn()
+        && validStudentId(studentId)
+        && (kind == 'cccd' || kind == 'eid' || kind == 'avatar');
+      allow write: if signedIn()
+        && validStudentId(studentId)
         && (kind == 'cccd' || kind == 'eid' || kind == 'avatar')
-        && (fileName.matches('(?i).*\\.(jpg|jpeg|png|webp)$'))
-        && request.resource.size < 4 * 1024 * 1024;
+        && validImageUpload();
     }
   }
 }

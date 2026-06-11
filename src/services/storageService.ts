@@ -1,7 +1,7 @@
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { auth, storage } from './firebase';
 
-const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/jpg']);
+const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024;
 
 export type StudentDocumentKind = 'cccd' | 'eid' | 'avatar';
@@ -25,6 +25,9 @@ export async function uploadStudentDocument(
   }
   // Standardize file.type or fall back based on file extension
   let contentType = file.type;
+  if (contentType === 'image/jpg') {
+    contentType = 'image/jpeg';
+  }
   if (!contentType && file.name) {
     const ext = file.name.split('.').pop()?.toLowerCase();
     if (ext === 'jpg' || ext === 'jpeg') contentType = 'image/jpeg';

@@ -623,6 +623,10 @@ async function startServer() {
         base64Data = match[2];
       }
 
+      if (mimeType === "image/jpg") {
+        mimeType = "image/jpeg";
+      }
+
       // Enforce file formats
       if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
         return res.status(400).json({ error: "Hệ thống chỉ chấp nhận định dạng ảnh JPG, PNG hoặc WEBP." });

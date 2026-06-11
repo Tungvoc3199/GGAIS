@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
 import { Student, StudentStatus, Lesson, Payment } from '../types';
 import { exportStudentsToExcel, printStudentsPDF, printStudentContractPDF } from '../utils/exportUtils';
-import { getLocalTodayString } from '../utils/dateUtils';
+import { getLocalTodayString, getLocalOffsetString } from '../utils/dateUtils';
 import { uploadStudentDocument } from '../services/storageService';
 import {
   Search,
@@ -422,6 +422,10 @@ export const Students: React.FC<StudentsProps> = ({
 
       // Automatically trigger OCR for CCCD or EID (electronic card) to read name, dob, and address
       if (cardType === 'cccd' || cardType === 'eid') {
+        if (!isFirebase) {
+          alert('Đã đính kèm ảnh trong chế độ demo offline. OCR tự động chỉ hoạt động khi đăng nhập Cloud.');
+          return;
+        }
         setIsOcrLoading(true);
         try {
           const typeLabel = cardType === 'cccd' ? 'Căn Cước Công Dân' : 'Căn cước điện tử VNeID';
@@ -516,8 +520,8 @@ export const Students: React.FC<StudentsProps> = ({
         licenseClass: newLicenseClass,
         courseType: newCourseType,
         totalFee: newTotalFee,
-        registrationDate: new Date().toISOString().split('T')[0],
-        nextPaymentDeadline: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 15 days from now
+        registrationDate: getLocalTodayString(),
+        nextPaymentDeadline: getLocalOffsetString(15),
         status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
         totalSessions: newTotalSessions,
         assignedInstructorId: newInstructorId,
@@ -582,7 +586,7 @@ export const Students: React.FC<StudentsProps> = ({
 
     const res = await addPayment({
       studentId: selectedStudent.id,
-      paymentDate: new Date().toISOString().split('T')[0],
+      paymentDate: getLocalTodayString(),
       amount: quickPayAmount,
       method: quickPayMethod,
       category: quickPayCat,

@@ -628,10 +628,10 @@ async function startServer() {
         return res.status(400).json({ error: "Hệ thống chỉ chấp nhận định dạng ảnh JPG, PNG hoặc WEBP." });
       }
 
-      // Enforce file limit of 5 MB
+      // Enforce file limit of 4 MB
       const binaryLength = base64Data.length * 0.75;
-      if (binaryLength > 5 * 1024 * 1024) {
-        return res.status(400).json({ error: "Ảnh tải lên vượt quá dung lượng tối đa cho phép là 5 MB." });
+      if (binaryLength > 4 * 1024 * 1024) {
+        return res.status(400).json({ error: "Ảnh tải lên vượt quá dung lượng tối đa cho phép là 4 MB." });
       }
 
       const ai = getGeminiClient();
@@ -641,9 +641,10 @@ Hãy đọc ảnh và trích xuất ra các thông tin chi tiết: Họ và tên
 Loại ảnh đang cung cấp: ${cardType || "Ảnh CCCD"}.
 Lưu ý quy tắc đặc biệt:
 1. Đối với Họ và tên, hãy trích xuất chính xác và viết hoa đầy đủ (Ví dụ: "NGUYỄN VĂN A").
-2. Đối với Ngày sinh, hãy chuẩn hóa về định dạng YYYY-MM-DD (Ví dụ: "15/04/1998" hay "15-04-1998" -> "1998-04-15"). Nếu không có ngày sinh cụ thể, hãy cố gắng dự đoán hoặc để trống.
+2. Đối với Ngày sinh, hãy chuẩn hóa về định dạng YYYY-MM-DD (Ví dụ: "15/04/1998" hay "15-04-1998" -> "1998-04-15"). Nếu không đọc rõ ngày sinh từ ảnh, bắt buộc trả về chuỗi rỗng. Không được suy đoán hoặc tự tạo dữ liệu.
 3. Đối với Địa chỉ, hãy lấy địa chỉ/quê quán hoặc nơi thường trú ghi trên thẻ.
-4. Nếu ảnh là "Ảnh thẻ/Ảnh chân dung" không có văn bản hoặc không phải là thẻ định danh, hãy để trống các trường trên hoặc trả về rỗng. Tránh bịa đặt ra thông tin không có trên ảnh.`;
+4. Nếu ảnh là "Ảnh thẻ/Ảnh chân dung" không có văn bản hoặc không phải là thẻ định danh, hãy để trống các trường trên hoặc trả về rỗng. Tránh bịa đặt ra thông tin không có trên ảnh.
+5. Không được suy đoán bất kỳ thông tin nào không nhìn thấy rõ trên ảnh. Nếu không chắc chắn, trả về chuỗi rỗng.`;
 
       const response = await ai.models.generateContent({
         model: "gemini-3.5-flash",

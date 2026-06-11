@@ -8,7 +8,7 @@ export async function uploadStudentDocument(
 ): Promise<string> {
   if (!file) return '';
   const fileExtension = file.name.split('.').pop() || 'jpg';
-  const fileRef = ref(storage, `students/${studentId}/${kind}.${fileExtension}`);
+  const fileRef = ref(storage, `students/${studentId}/${kind}/${kind}.${fileExtension}`);
   await uploadBytes(fileRef, file);
   return await getDownloadURL(fileRef);
 }

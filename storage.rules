@@ -1,0 +1,12 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // TODO SECURITY: Before production, restrict CCCD and EID read/write to Admin and Staff roles only. Avatar permissions may be handled separately.
+    match /students/{studentId}/{kind}/{fileName} {
+      allow read, write: if request.auth != null
+        && (kind == 'cccd' || kind == 'eid' || kind == 'avatar')
+        && (fileName.matches('(?i).*\\.(jpg|jpeg|png|webp)$'))
+        && request.resource.size < 4 * 1024 * 1024;
+    }
+  }
+}

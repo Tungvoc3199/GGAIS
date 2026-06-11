@@ -8,6 +8,7 @@ import { useDatabase } from '../context/DatabaseContext';
 import { Student, StudentStatus, Lesson, Payment } from '../types';
 import { exportStudentsToExcel, printStudentsPDF, printStudentContractPDF } from '../utils/exportUtils';
 import { getLocalTodayString } from '../utils/dateUtils';
+import { uploadStudentDocument } from '../services/storageService';
 import {
   Search,
   Filter,
@@ -63,7 +64,8 @@ export const Students: React.FC<StudentsProps> = ({
     archiveStudent,
     addPayment,
     addAuditLog,
-    authFetch
+    authFetch,
+    isFirebase
   } = useDatabase();
 
   // Search & Filtering States
@@ -251,6 +253,9 @@ export const Students: React.FC<StudentsProps> = ({
   const [cccdImage, setCccdImage] = useState<string>('');
   const [avatarImage, setAvatarImage] = useState<string>('');
   const [eidImage, setEidImage] = useState<string>('');
+  const [cccdFile, setCccdFile] = useState<File | null>(null);
+  const [eidFile, setEidFile] = useState<File | null>(null);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [isOcrLoading, setIsOcrLoading] = useState<boolean>(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
@@ -406,10 +411,13 @@ export const Students: React.FC<StudentsProps> = ({
       const base64Str = reader.result as string;
       if (cardType === 'cccd') {
         setCccdImage(base64Str);
+        setCccdFile(file);
       } else if (cardType === 'avatar') {
         setAvatarImage(base64Str);
+        setAvatarFile(file);
       } else if (cardType === 'eid') {
         setEidImage(base64Str);
+        setEidFile(file);
       }
 
       // Automatically trigger OCR for CCCD or EID (electronic card) to read name, dob, and address
@@ -475,7 +483,32 @@ export const Students: React.FC<StudentsProps> = ({
 
     setIsCreatingStudent(true);
     try {
+      const studentId = `stud_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      let finalCccdImage = isFirebase ? '' : cccdImage;
+      let finalEidImage = isFirebase ? '' : eidImage;
+      let finalAvatarImage = isFirebase ? '' : avatarImage;
+
+      if (isFirebase) {
+        try {
+          if (cccdFile) {
+            finalCccdImage = await uploadStudentDocument(studentId, 'cccd', cccdFile);
+          }
+          if (eidFile) {
+            finalEidImage = await uploadStudentDocument(studentId, 'eid', eidFile);
+          }
+          if (avatarFile) {
+            finalAvatarImage = await uploadStudentDocument(studentId, 'avatar', avatarFile);
+          }
+        } catch (uploadErr: any) {
+          console.error('Lỗi tải file lên Firebase Storage:', uploadErr);
+          alert(`Tải tài liệu học viên lên Cloud thất bại: ${uploadErr.message || String(uploadErr)}. Vui lòng thử lại.`);
+          setIsCreatingStudent(false);
+          return;
+        }
+      }
+
       await addStudent({
+        id: studentId,
         name: newName.trim(),
         phone: newPhone.trim(),
         dob: newDob,
@@ -492,9 +525,9 @@ export const Students: React.FC<StudentsProps> = ({
         notes: newNotes,
         reminderStatus: 'Chưa nhắc',
         tags: newTags,
-        cccdImage,
-        avatarImage,
-        eidImage
+        cccdImage: finalCccdImage,
+        avatarImage: finalAvatarImage,
+        eidImage: finalEidImage
       });
 
       alert('Đăng ký tuyển sinh học viên thành công!');
@@ -510,6 +543,9 @@ export const Students: React.FC<StudentsProps> = ({
       setCccdImage('');
       setAvatarImage('');
       setEidImage('');
+      setCccdFile(null);
+      setEidFile(null);
+      setAvatarFile(null);
     } catch (err: any) {
       console.error('Đăng ký học viên thất bại:', err);
       alert(`Đăng ký học viên thất bại: ${err.message || String(err)}. Vui lòng thử lại.`);

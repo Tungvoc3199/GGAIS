@@ -80,7 +80,7 @@ interface DatabaseContextType {
   logout: () => void;
   toggleDatabaseMode: (preferLocal: boolean) => void;
   // Student Actions
-  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => Promise<void>;
+  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'> & { id?: string }) => Promise<void>;
   updateStudent: (id: string, updated: Partial<Student>) => Promise<{ success: boolean; error?: string }>;
   deleteStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   archiveStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -671,10 +671,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // --- STUDENT ACTIONS ---
-  const addStudent = async (newS: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => {
+  const addStudent = async (newS: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'> & { id?: string }) => {
     const yy = new Date().getFullYear().toString().slice(-2);
     let code = `HV-${yy}-0001`;
-    const id = generateUniqueId('stud');
+    const id = newS.id || generateUniqueId('stud');
+    const { id: _, ...restOfS } = newS;
 
     if (isFirebase) {
       try {
@@ -692,7 +693,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           transaction.set(counterRef, { nextCodeNo: nextNum + 1 }, { merge: true });
 
           const freshStudent: Student = {
-            ...newS,
+            ...restOfS,
             id,
             code,
             paidAmount: 0,
@@ -722,7 +723,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       code = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
 
       const freshStudent: Student = {
-        ...newS,
+        ...restOfS,
         id,
         code,
         paidAmount: 0,

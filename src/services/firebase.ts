@@ -18,7 +18,7 @@ export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId || '(defa
 // Initialize Auth
 export const auth = getAuth(app);
 
-// Initialize Cloud Storage for student documents and media
+// Initialize Storage
 export const storage = getStorage(app);
 
 export enum OperationType {

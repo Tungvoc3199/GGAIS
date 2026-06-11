@@ -37,8 +37,8 @@ export async function uploadStudentDocument(
   if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
     throw new Error('Chỉ hỗ trợ ảnh JPG, PNG hoặc WEBP.');
   }
-  if (file.size > MAX_IMAGE_SIZE_BYTES) {
-    throw new Error('Ảnh vượt quá giới hạn 4 MB.');
+  if (file.size >= MAX_IMAGE_SIZE_BYTES) {
+    throw new Error('Ảnh phải nhỏ hơn 4 MB.');
   }
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(studentId)) {
     throw new Error('Mã học viên không hợp lệ.');

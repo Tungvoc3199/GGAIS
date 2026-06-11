@@ -634,8 +634,8 @@ async function startServer() {
 
       // Enforce file limit of 4 MB
       const binaryLength = base64Data.length * 0.75;
-      if (binaryLength > 4 * 1024 * 1024) {
-        return res.status(400).json({ error: "Ảnh tải lên vượt quá dung lượng tối đa cho phép là 4 MB." });
+      if (binaryLength >= 4 * 1024 * 1024) {
+        return res.status(400).json({ error: "Ảnh tải lên phải nhỏ hơn 4 MB." });
       }
 
       const ai = getGeminiClient();

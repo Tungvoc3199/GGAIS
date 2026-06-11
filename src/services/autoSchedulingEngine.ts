@@ -282,8 +282,9 @@ export function runAdvancedSchedulingEngine(
         const dStr = dObj.toISOString().split('T')[0];
 
         // For alternatives, scan standard school hours (e.g. 07:00 - 18:00)
-        const schoolStartMin = timeToMinutes(settings.workingHours.start);
-        const schoolEndMin = timeToMinutes(settings.workingHours.end);
+        const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
+        const schoolStartMin = timeToMinutes(schoolHours.start);
+        const schoolEndMin = timeToMinutes(schoolHours.end);
 
         for (let m = schoolStartMin; m + params.duration <= schoolEndMin; m += 30) {
           const sTime = minutesToTime(m);
@@ -329,9 +330,10 @@ export function runAdvancedSchedulingEngine(
       }
 
       // Check Time Window preference
+      const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
       const rangesToScan = params.preferredTimeRanges.length > 0
         ? params.preferredTimeRanges
-        : [{ start: settings.workingHours.start, end: settings.workingHours.end }];
+        : [{ start: schoolHours.start, end: schoolHours.end }];
 
       // Try each instructor and vehicle pairing
       for (const inst of eligibleInstructors) {
@@ -507,12 +509,13 @@ export function evaluateIndividualAndWorkloadConflicts(
     return conflicts;
   }
 
-  const schoolStart = timeToMinutes(settings.workingHours.start);
-  const schoolEnd = timeToMinutes(settings.workingHours.end);
+  const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
+  const schoolStart = timeToMinutes(schoolHours.start);
+  const schoolEnd = timeToMinutes(schoolHours.end);
   if (startM < schoolStart || endM > schoolEnd) {
     conflicts.push({
       type: 'OUTSIDE_HOURS',
-      message: `Ca học nằm ngoài khung giờ mở cửa của trường (${settings.workingHours.start} - ${settings.workingHours.end}).`
+      message: `Ca học nằm ngoài khung giờ mở cửa của trường (${schoolHours.start} - ${schoolHours.end}).`
     });
   }
 
@@ -548,12 +551,13 @@ export function evaluateIndividualAndWorkloadConflicts(
     }
 
     // Constraint: instructor's daily working hours bounds
-    const teacherStart = timeToMinutes(teacher.workingHours.start);
-    const teacherEnd = timeToMinutes(teacher.workingHours.end);
+    const teachHours = teacher.workingHours || { start: '07:00', end: '18:00' };
+    const teacherStart = timeToMinutes(teachHours.start);
+    const teacherEnd = timeToMinutes(teachHours.end);
     if (startM < teacherStart || endM > teacherEnd) {
       conflicts.push({
         type: 'OUTSIDE_HOURS',
-        message: `Học ngoài giờ trực cá nhân của giáo viên ${teacher.name} (${teacher.workingHours.start} - ${teacher.workingHours.end}).`
+        message: `Học ngoài giờ trực cá nhân của giáo viên ${teacher.name} (${teachHours.start} - ${teachHours.end}).`
       });
     }
   } else {

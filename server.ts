@@ -170,18 +170,24 @@ async function startServer() {
     }
 
     const { studentId, paymentDate, amount, method, category, receiver, notes } = req.body;
-    if (!studentId || !amount) {
+    if (!studentId || amount === undefined || amount === null) {
       return res.status(400).json({ error: "Bắt buộc cung cấp mã học viên và số tiền thanh toán." });
+    }
+
+    const numAmount = Number(amount);
+    if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
+      return res.status(400).json({ error: "Thanh toán không hợp lệ: Số tiền phải là số hữu hạn lớn hơn 0." });
     }
 
     const adminDb = getAdminDb();
     const payId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const shouldApproveImmediately = (user.role === "Admin" || user.role === "Accountant" || (category !== "Thanh toán bổ sung" && category !== "Khác"));
+    const isStaff = user.role === "Staff";
+    const shouldApproveImmediately = !isStaff && (user.role === "Admin" || user.role === "Accountant" || (category !== "Thanh toán bổ sung" && category !== "Khác"));
     const freshPayment = {
       id: payId,
       studentId,
       paymentDate: paymentDate || new Date().toISOString().split("T")[0],
-      amount: Number(amount),
+      amount: numAmount,
       method: method || "Chuyển khoản",
       category: category || "Đợt 1",
       receiver: receiver || user.displayName,
@@ -378,6 +384,10 @@ async function startServer() {
   // 5. Handles batch-confirm of scheduling sugerences, transactional check with rigid constraints
   app.post("/api/lessons/batch-confirm", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
+    if (user.role !== "Admin" && user.role !== "Staff") {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Chỉ quản trị viên hoặc nhân viên nghiệp vụ mới được gọi." });
+    }
+
     const { lessons, overrideReason } = req.body;
     if (!lessons || !Array.isArray(lessons)) {
       return res.status(400).json({ error: "Định dạng danh sách ca tập gửi lên không hợp lệ." });
@@ -419,19 +429,34 @@ async function startServer() {
           const newL = lessons[idx];
           const reasons: string[] = [];
 
+          // Validate entity existence
+          const studentExist = studentsMap[newL.studentId];
+          const teacher = instructors.find((i) => i.id === newL.instructorId);
+          const car = vehicles.find((v) => v.id === newL.vehicleId);
+
+          if (!studentExist) {
+            throw new Error(`Xếp lịch thất bại: Học viên ID ${newL.studentId} không hợp lệ hoặc không tồn tại.`);
+          }
+          if (!teacher) {
+            throw new Error(`Xếp lịch thất bại: Giảng viên ID ${newL.instructorId} không tồn tại hoặc bị xóa.`);
+          }
+          if (!car) {
+            throw new Error(`Xếp lịch thất bại: Xe tập ID ${newL.vehicleId} không tồn tại hoặc bị xóa.`);
+          }
+
           if (timeToMinutes(newL.endTime) <= timeToMinutes(newL.startTime)) {
             reasons.push("Khung giờ bắt đầu phải kết thúc trước mốc kết thúc.");
           }
 
-          const teacher = instructors.find((i) => i.id === newL.instructorId);
           if (teacher) {
-            const teachStart = timeToMinutes(teacher.workingHours.start);
-            const teachEnd = timeToMinutes(teacher.workingHours.end);
+            const teachHours = teacher.workingHours || { start: "07:00", end: "18:00" };
+            const teachStart = timeToMinutes(teachHours.start);
+            const teachEnd = timeToMinutes(teachHours.end);
             const lessonStart = timeToMinutes(newL.startTime);
             const lessonEnd = timeToMinutes(newL.endTime);
 
             if (lessonStart < teachStart || lessonEnd > teachEnd) {
-              reasons.push(`Ngoài giờ hành chính của GV ${teacher.name} (${teacher.workingHours.start} - ${teacher.workingHours.end}).`);
+              reasons.push(`Ngoài giờ hành chính của GV ${teacher.name} (${teachHours.start} - ${teachHours.end}).`);
             }
 
             if (teacher.daysOff && teacher.daysOff.includes(newL.date)) {
@@ -446,7 +471,6 @@ async function startServer() {
             }
           }
 
-          const car = vehicles.find((v) => v.id === newL.vehicleId);
           if (car && car.status !== "Sẵn sàng") {
             reasons.push(`Xe tập ${car.name} (${car.plate}) hiện tại: ${car.status}.`);
           }
@@ -555,9 +579,28 @@ async function startServer() {
     }
   });
 
+  const ocrRateLimits = new Map<string, { count: number; resetTime: number }>();
+
   // API Endpoint to process OCR on identity cards (CCCD) / profiles
-  app.post("/api/ocr-card", async (req, res) => {
+  app.post("/api/ocr-card", checkAuth, async (req, res) => {
     try {
+      const user = req.currentUserProfile;
+      const now = Date.now();
+      const userLimit = ocrRateLimits.get(user.uid);
+
+      if (userLimit) {
+        if (now < userLimit.resetTime) {
+          if (userLimit.count >= 10) { // max 10 OCR per minute
+            return res.status(429).json({ error: "Yêu cầu quá nhanh: Đã vượt tần suất 10 lượt nhận diện định danh CCCD/phút. Vui lòng dừng đợi." });
+          }
+          userLimit.count++;
+        } else {
+          ocrRateLimits.set(user.uid, { count: 1, resetTime: now + 60000 });
+        }
+      } else {
+        ocrRateLimits.set(user.uid, { count: 1, resetTime: now + 60000 });
+      }
+
       const { image, cardType } = req.body;
       if (!image) {
         return res.status(400).json({ error: "Không tìm thấy ảnh tải lên." });
@@ -571,8 +614,6 @@ async function startServer() {
         });
       }
 
-      const ai = getGeminiClient();
-
       // Parse base64 and mime-type
       const match = image.match(/^data:([^;]+);base64,(.+)$/);
       let mimeType = "image/jpeg";
@@ -581,6 +622,19 @@ async function startServer() {
         mimeType = match[1];
         base64Data = match[2];
       }
+
+      // Enforce file formats
+      if (!["image/jpeg", "image/png", "image/webp"].includes(mimeType)) {
+        return res.status(400).json({ error: "Hệ thống chỉ chấp nhận định dạng ảnh JPG, PNG hoặc WEBP." });
+      }
+
+      // Enforce file limit of 5 MB
+      const binaryLength = base64Data.length * 0.75;
+      if (binaryLength > 5 * 1024 * 1024) {
+        return res.status(400).json({ error: "Ảnh tải lên vượt quá dung lượng tối đa cho phép là 5 MB." });
+      }
+
+      const ai = getGeminiClient();
 
       const prompt = `Bạn là một mô hình AI tiện ích giúp phân tích ảnh chụp thẻ hồ sơ người dùng Việt Nam. 
 Hãy đọc ảnh và trích xuất ra các thông tin chi tiết: Họ và tên (Full name), Ngày sinh (Date of birth), và Địa chỉ thường trú (Permanent address).

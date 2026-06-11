@@ -51,7 +51,9 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
     settings,
     addLesson,
     addAuditLog,
-    currentUser
+    currentUser,
+    isFirebase,
+    batchConfirmLessons
   } = useDatabase();
 
   // Navigation tab to separate Wizard and Unit Tests
@@ -168,12 +170,10 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
   };
 
   // Confirm and batch saving recommended slots down into Database
-  const handleConfirmAll = () => {
-    let savedCount = 0;
-    
-    recommendedSlots.forEach((slot) => {
+  const handleConfirmAll = async () => {
+    const formattedLessons = recommendedSlots.map((slot) => {
       const studentClass = students.find(s => s.id === slot.studentId);
-      addLesson({
+      return {
         studentId: slot.studentId,
         instructorId: slot.instructorId,
         vehicleId: slot.vehicleId,
@@ -184,20 +184,39 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
         pickupLocation: studentClass?.address || 'Điểm hẹn quy định',
         trainingLocation: 'Bãi tập Trung tâm',
         notes: `Được xếp tự động thông qua Thuật Toán AI. Điểm ưu tiên: ${slot.score}`,
-        status: 'Chờ xác nhận',
-        attendanceStatus: 'Chưa điểm danh',
+        status: 'Chờ xác nhận' as const,
+        attendanceStatus: 'Chưa điểm danh' as const,
         resultNote: ''
-      });
-      savedCount++;
+      };
     });
 
-    addAuditLog(
-      'Xếp lịch tự động',
-      `Đã chạy thành công thuật toán nén ghép ca, kích hoạt ${savedCount} lịch học thông minh mới.`
-    );
-    
-    alert(`Đã xếp lịch tự động thành công cho ${savedCount} buổi học!`);
-    onNavigate('lich-hoc');
+    if (isFirebase) {
+      try {
+        const res = await batchConfirmLessons(formattedLessons);
+        if (res.success) {
+          alert(`Đã xếp lịch tự động thành công cho ${res.committedCount || formattedLessons.length} buổi học!`);
+          onNavigate('lich-hoc');
+        } else {
+          alert(`Xếp lịch hàng loạt thất bại: ${res.message || 'Lỗi lưu thông tin.'}`);
+        }
+      } catch (err: any) {
+        alert(`Gặp lỗi khi lưu lịch hàng loạt: ${err.message || String(err)}`);
+      }
+    } else {
+      let savedCount = 0;
+      formattedLessons.forEach((newL) => {
+        addLesson(newL);
+        savedCount++;
+      });
+
+      addAuditLog(
+        'Xếp lịch tự động',
+        `Đã chạy thành công thuật toán nén ghép ca, kích hoạt ${savedCount} lịch học thông minh mới.`
+      );
+      
+      alert(`Đã xếp lịch tự động thành công cho ${savedCount} buổi học!`);
+      onNavigate('lich-hoc');
+    }
   };
 
   // Execute Unit Tests
@@ -234,13 +253,21 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
   };
 
   // Complete the manual override database insert & logs
-  const handleExecuteManualOverride = () => {
+  const handleExecuteManualOverride = async () => {
     if (!overrideTarget) return;
 
-    // Construct overridden lesson bypassing any conflicts
+    if (currentUser?.role !== 'Admin') {
+      alert('Chỉ tài khoản quyền Quản trị viên (Admin) mới có quyền cưỡng chế ghi đè lịch!');
+      return;
+    }
+
+    if (!overrideReason.trim()) {
+      alert('Vui lòng gán lý do cưỡng chế ghi đè để lưu hồ sơ.');
+      return;
+    }
+
     const studentObj = students.find(s => s.id === overrideTarget.studentId);
-    
-    addLesson({
+    const newLessonObj = {
       studentId: overrideTarget.studentId,
       instructorId: overrideTarget.instructorId,
       vehicleId: overrideTarget.vehicleId,
@@ -251,27 +278,46 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
       pickupLocation: studentObj?.address || 'Đưa đón tại nhà',
       trainingLocation: 'Sân tập liên kết',
       notes: `Ghi đè thủ công bởi ${currentUser?.displayName || 'Quản trị viên'}. Lý do: ${overrideReason}`,
-      status: 'Đã xác nhận',
-      attendanceStatus: 'Chưa điểm danh',
+      status: 'Đã xác nhận' as const,
+      attendanceStatus: 'Chưa điểm danh' as const,
       resultNote: 'Ghi đè trùng ca - Chấp nhận rủi ro'
-    });
+    };
 
-    const actorName = currentUser?.displayName || 'Admin';
-    const actorEmail = currentUser?.email || 'admin@truonglaipro.vn';
+    if (isFirebase) {
+      try {
+        const res = await batchConfirmLessons([newLessonObj], overrideReason);
+        if (res.success) {
+          setOverrideSuccessMessage(`Ghi đè lịch thành công cho học viên ${overrideTarget.studentName}!`);
+          setTimeout(() => {
+            setFailedSlots(prev => prev.filter(f => f.studentId !== overrideTarget.studentId));
+            setOverrideTarget(null);
+          }, 1500);
+        } else {
+          alert(`Cưỡng chế ghi đè lịch thất bại: ${res.message || 'Lỗi server.'}`);
+        }
+      } catch (err: any) {
+        alert(`Gặp lỗi khi ghi đè lịch: ${err.message || String(err)}`);
+      }
+    } else {
+      addLesson(newLessonObj);
 
-    addAuditLog(
-      'Ghi đè lịch học thủ công',
-      `QUYỀN LỰC GHI ĐÈ: ${actorName} (${actorEmail}) đã ép buộc xếp ca cho HS ${overrideTarget.studentName} vào ngày ${overrideTarget.date} (${overrideTarget.startTime}-${overrideTarget.endTime}). Lý do: ${overrideReason}`
-    );
+      const actorName = currentUser?.displayName || 'Admin';
+      const actorEmail = currentUser?.email || 'admin@truonglaipro.vn';
 
-    setOverrideSuccessMessage(`Ghi đè lịch thành công cho học viên ${overrideTarget.studentName}!`);
-    
-    // Clear out target after delayed simulation
-    setTimeout(() => {
-      // Remove from failed slots visual grid
-      setFailedSlots(prev => prev.filter(f => f.studentId !== overrideTarget.studentId));
-      setOverrideTarget(null);
-    }, 1500);
+      addAuditLog(
+        'Ghi đè lịch học thủ công',
+        `QUYỀN LỰC GHI ĐÈ: ${actorName} (${actorEmail}) đã ép buộc xếp ca cho HS ${overrideTarget.studentName} vào ngày ${overrideTarget.date} (${overrideTarget.startTime}-${overrideTarget.endTime}). Lý do: ${overrideReason}`
+      );
+
+      setOverrideSuccessMessage(`Ghi đè lịch thành công cho học viên ${overrideTarget.studentName}!`);
+      
+      // Clear out target after delayed simulation
+      setTimeout(() => {
+        // Remove from failed slots visual grid
+        setFailedSlots(prev => prev.filter(f => f.studentId !== overrideTarget.studentId));
+        setOverrideTarget(null);
+      }, 1500);
+    }
   };
 
   return (

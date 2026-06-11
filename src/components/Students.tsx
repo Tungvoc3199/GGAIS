@@ -7,6 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
 import { Student, StudentStatus, Lesson, Payment } from '../types';
 import { exportStudentsToExcel, printStudentsPDF, printStudentContractPDF } from '../utils/exportUtils';
+import { getLocalTodayString } from '../utils/dateUtils';
 import {
   Search,
   Filter,
@@ -61,7 +62,8 @@ export const Students: React.FC<StudentsProps> = ({
     deleteStudent,
     archiveStudent,
     addPayment,
-    addAuditLog
+    addAuditLog,
+    authFetch
   } = useDatabase();
 
   // Search & Filtering States
@@ -222,6 +224,7 @@ export const Students: React.FC<StudentsProps> = ({
   // New Student State
   const [isAdding, setIsAdding] = useState(false);
   const [isWaitlist, setIsWaitlist] = useState(false);
+  const [isCreatingStudent, setIsCreatingStudent] = useState(false);
 
   useEffect(() => {
     if (quickFormOpen && quickFormType === 'student') {
@@ -279,7 +282,7 @@ export const Students: React.FC<StudentsProps> = ({
   const getNextLessonForStudent = (sId: string): Lesson | undefined => {
     const studentLessons = lessons.filter(l => l.studentId === sId);
     if (studentLessons.length === 0) return undefined;
-    const todayStr = '2026-06-02';
+    const todayStr = getLocalTodayString();
     // first upcoming sorted asc
     const upcoming = studentLessons.filter(l => l.date >= todayStr);
     if (upcoming.length > 0) {
@@ -414,12 +417,10 @@ export const Students: React.FC<StudentsProps> = ({
         setIsOcrLoading(true);
         try {
           const typeLabel = cardType === 'cccd' ? 'Căn Cước Công Dân' : 'Căn cước điện tử VNeID';
-          const response = await fetch('/api/ocr-card', {
+          const result = await authFetch('/api/ocr-card', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ image: base64Str, cardType: typeLabel }),
           });
-          const result = await response.json();
           if (result.success && result.data) {
             const { fullName, address, dob } = result.data;
             if (fullName) {
@@ -453,7 +454,7 @@ export const Students: React.FC<StudentsProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleCreateStudent = (e: React.FormEvent) => {
+  const handleCreateStudent = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newName || !newPhone) {
       alert('Vui lòng nhập tên và số điện thoại học viên.');
@@ -472,39 +473,49 @@ export const Students: React.FC<StudentsProps> = ({
       return;
     }
 
-    addStudent({
-      name: newName,
-      phone: newPhone,
-      dob: newDob,
-      address: newAddress,
-      licenseClass: newLicenseClass,
-      courseType: newCourseType,
-      totalFee: newTotalFee,
-      registrationDate: new Date().toISOString().split('T')[0],
-      nextPaymentDeadline: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 15 days from now
-      status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
-      totalSessions: newTotalSessions,
-      assignedInstructorId: newInstructorId,
-      assignedVehicleId: newVehicleId,
-      notes: newNotes,
-      reminderStatus: 'Chưa nhắc',
-      tags: newTags,
-      cccdImage,
-      avatarImage,
-      eidImage
-    });
+    setIsCreatingStudent(true);
+    try {
+      await addStudent({
+        name: newName.trim(),
+        phone: newPhone.trim(),
+        dob: newDob,
+        address: newAddress.trim(),
+        licenseClass: newLicenseClass,
+        courseType: newCourseType,
+        totalFee: newTotalFee,
+        registrationDate: new Date().toISOString().split('T')[0],
+        nextPaymentDeadline: new Date(Date.now() + 15 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 15 days from now
+        status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
+        totalSessions: newTotalSessions,
+        assignedInstructorId: newInstructorId,
+        assignedVehicleId: newVehicleId,
+        notes: newNotes,
+        reminderStatus: 'Chưa nhắc',
+        tags: newTags,
+        cccdImage,
+        avatarImage,
+        eidImage
+      });
 
-    // Reset Form
-    setNewName('');
-    setNewPhone('');
-    setNewAddress('');
-    setNewNotes('');
-    setNewTags([]);
-    setIsWaitlist(false);
-    setIsAdding(false);
-    setCccdImage('');
-    setAvatarImage('');
-    setEidImage('');
+      alert('Đăng ký tuyển sinh học viên thành công!');
+
+      // Reset Form (Only on safe success)
+      setNewName('');
+      setNewPhone('');
+      setNewAddress('');
+      setNewNotes('');
+      setNewTags([]);
+      setIsWaitlist(false);
+      setIsAdding(false);
+      setCccdImage('');
+      setAvatarImage('');
+      setEidImage('');
+    } catch (err: any) {
+      console.error('Đăng ký học viên thất bại:', err);
+      alert(`Đăng ký học viên thất bại: ${err.message || String(err)}. Vui lòng thử lại.`);
+    } finally {
+      setIsCreatingStudent(false);
+    }
   };
 
   const handleSaveNote = () => {
@@ -518,7 +529,7 @@ export const Students: React.FC<StudentsProps> = ({
     alert('Đã cập nhật ghi chú học viên thành công.');
   };
 
-  const handleQuickPaymentSubmit = (e: React.FormEvent) => {
+  const handleQuickPaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedStudent) return;
     if (quickPayAmount <= 0) {
@@ -533,19 +544,20 @@ export const Students: React.FC<StudentsProps> = ({
       if (!confirmOverpay) return;
     }
 
-    const res = addPayment({
+    const res = await addPayment({
       studentId: selectedStudent.id,
       paymentDate: new Date().toISOString().split('T')[0],
       amount: quickPayAmount,
       method: quickPayMethod,
       category: quickPayCat,
       receiver: currentUser?.displayName || 'Thu ngân tự động',
-      notes: `Thu nhanh từ bảng học viên: ${quickPayCat}`
+      notes: `Thu nhanh từ bảng học viên: ${quickPayCat}`,
+      status: 'Chờ duyệt' // Staff adds, will be 'Chờ duyệt'. Admin will automatically approve/pre-approve if allowed.
     });
 
     if (res.success) {
       setQuickPayAmount(0);
-      alert('Thu nợ học phí thành công!');
+      alert('Gửi yêu cầu thu nợ học phí thành công! Biên lai đã được chuyển tới bộ phận kế toán.');
     } else {
       alert(res.error || 'Có lỗi phát sinh trong quá trình thanh toán.');
     }
@@ -2179,16 +2191,24 @@ export const Students: React.FC<StudentsProps> = ({
               <div className="pt-2 border-t border-slate-100 flex gap-3 justify-end">
                 <button
                   type="button"
+                  disabled={isCreatingStudent}
                   onClick={() => setIsAdding(false)}
-                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-4 rounded-xl cursor-pointer"
+                  className="bg-slate-100 hover:bg-slate-200 text-slate-700 py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-50"
                 >
                   HỦY BỎ
                 </button>
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-sm transition-all"
+                  disabled={isCreatingStudent}
+                  className="bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-sm transition-all disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  ✓ ĐĂNG KÝ HỌC VIÊN
+                  {isCreatingStudent ? (
+                    <>
+                      <Clock className="animate-spin h-3.5 w-3.5 text-white" /> ĐANG ĐĂNG KÝ...
+                    </>
+                  ) : (
+                    '✓ ĐĂNG KÝ HỌC VIÊN'
+                  )}
                 </button>
               </div>
             </form>

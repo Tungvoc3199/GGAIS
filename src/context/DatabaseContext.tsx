@@ -80,7 +80,7 @@ interface DatabaseContextType {
   logout: () => void;
   toggleDatabaseMode: (preferLocal: boolean) => void;
   // Student Actions
-  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => void;
+  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'>) => Promise<void>;
   updateStudent: (id: string, updated: Partial<Student>) => Promise<{ success: boolean; error?: string }>;
   deleteStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   archiveStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -90,9 +90,11 @@ interface DatabaseContextType {
   cancelLesson: (id: string, reason: string) => void;
   deleteLesson: (id: string) => void;
   // Payment Actions
-  addPayment: (payment: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => { success: boolean; error?: string };
-  cancelPayment: (id: string, reason: string) => void;
-  approvePayment: (id: string) => void;
+  addPayment: (payment: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => Promise<{ success: boolean; error?: string }>;
+  cancelPayment: (id: string, reason: string) => Promise<void>;
+  approvePayment: (id: string) => Promise<void>;
+  batchConfirmLessons: (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => Promise<{ success: boolean; committedCount?: number; hasConflicts?: boolean; conflicts?: any[]; message?: string }>;
+  authFetch: (url: string, options?: RequestInit) => Promise<any>;
   // Instructor Actions
   addInstructor: (instructor: Omit<Instructor, 'id'>) => void;
   updateInstructor: (id: string, updated: Partial<Instructor>) => void;
@@ -817,8 +819,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const addLesson = (newL: Omit<Lesson, 'id'>) => {
     const id = generateUniqueId('less');
     const freshLesson: Lesson = {
-      id,
-      ...newL
+      ...newL,
+      id
     };
 
     setLessons(prev => [freshLesson, ...prev]);
@@ -831,8 +833,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     
     // Check if the lesson overrides normal business hours
     const [startH, startM] = newL.startTime.split(':').map(Number);
-    const [workH, workM] = settings.workingHours.start.split(':').map(Number);
-    const [endH, endM] = settings.workingHours.end.split(':').map(Number);
+    const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
+    const [workH, workM] = schoolHours.start.split(':').map(Number);
+    const [endH, endM] = schoolHours.end.split(':').map(Number);
     
     const startVal = startH * 60 + startM;
     const workVal = workH * 60 + workM;
@@ -934,69 +937,109 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     await addAuditLog('Xóa lịch học', `Xóa hẳn sự kiện lịch học mã ID: ${id}.`);
   };
 
-  // --- PAYMENT ACTIONS (Ledger Hardening enforces payments CANNOT be deleted, only soft-cancelled) ---
-  const addPayment = (newP: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => {
-    const student = students.find(s => s.id === newP.studentId);
-    if (!student) {
-      return { success: false, error: 'Không tìm thấy thông tin đăng ký của học viên này để đối soát thanh toán.' };
-    }
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const user = auth.currentUser;
+    if (!user) throw new Error("Chưa đăng nhập Firebase.");
+    const token = await user.getIdToken();
 
-    const payId = generateUniqueId('pay');
-    const freshPayment: Payment = {
-      ...newP,
-      id: payId,
-      isCancelled: false,
-      createdAt: new Date().toISOString(),
-      createdBy: currentUser?.email || 'system@lichhocpro.vn'
-    };
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {})
+      }
+    });
 
-    setPayments(prev => [freshPayment, ...prev]);
-
-    // Async push of payment ledger and student balances updates
-    if (isFirebase) {
-      savePaymentDoc(freshPayment).catch(err => console.error('Lỗi khi chèn Payment:', err));
-    }
-
-    if (newP.status !== 'Chờ duyệt') {
-      setStudents(prev => prev.map(s => {
-        if (s.id === newP.studentId) {
-          const newPaid = s.paidAmount + newP.amount;
-          const newRemaining = Math.max(0, s.totalFee - newPaid);
-          const updatedStudent = {
-            ...s,
-            paidAmount: newPaid,
-            remainingAmount: newRemaining,
-            reminderStatus: 'Chưa nhắc' as any
-          };
-          if (isFirebase) {
-            saveStudentDoc(updatedStudent).catch(err => console.error(err));
-          }
-          return updatedStudent;
-        }
-        return s;
-      }));
-    }
-
-    addAuditLog('Thu học phí', `Ghi nhận thu tiền từ HV ${student.name}: +${newP.amount.toLocaleString('vi-VN')} đ cho mục ${newP.category} (${newP.status || 'Đã duyệt'}).`);
-    return { success: true };
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Lỗi máy chủ.");
+    return data;
   };
 
-  const approvePayment = (id: string) => {
-    let affectedPayment: Payment | undefined;
-    setPayments(prev => prev.map(p => {
-      if (p.id === id) {
-        affectedPayment = p;
-        return { ...p, status: 'Đã duyệt' };
+  // --- PAYMENT ACTIONS (Ledger Hardening enforces payments CANNOT be deleted, only soft-cancelled) ---
+  const addPayment = async (newP: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => {
+    if (isFirebase) {
+      try {
+        setDataLoading(true);
+        const res = await authFetch('/api/payments/create', {
+          method: 'POST',
+          body: JSON.stringify(newP)
+        });
+        await loadFirestoreData();
+        return { success: true };
+      } catch (err: any) {
+        console.error('Lỗi khi thu học phí:', err);
+        return { success: false, error: err.message || String(err) };
+      } finally {
+        setDataLoading(false);
       }
-      return p;
-    }));
+    } else {
+      const student = students.find(s => s.id === newP.studentId);
+      if (!student) {
+        return { success: false, error: 'Không tìm thấy thông tin đăng ký của học viên này để đối soát thanh toán.' };
+      }
 
-    setTimeout(() => {
+      const payId = generateUniqueId('pay');
+      const freshPayment: Payment = {
+        ...newP,
+        id: payId,
+        isCancelled: false,
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser?.email || 'system@lichhocpro.vn'
+      };
+
+      setPayments(prev => [freshPayment, ...prev]);
+
+      if (newP.status !== 'Chờ duyệt') {
+        setStudents(prev => prev.map(s => {
+          if (s.id === newP.studentId) {
+            const newPaid = s.paidAmount + newP.amount;
+            const newRemaining = Math.max(0, s.totalFee - newPaid);
+            const updatedStudent = {
+              ...s,
+              paidAmount: newPaid,
+              remainingAmount: newRemaining,
+              reminderStatus: 'Chưa nhắc' as any
+            };
+            return updatedStudent;
+          }
+          return s;
+        }));
+      }
+
+      addAuditLog('Thu học phí', `Ghi nhận thu tiền từ HV ${student.name}: +${newP.amount.toLocaleString('vi-VN')} đ cho mục ${newP.category} (${newP.status || 'Đã duyệt'}).`);
+      return { success: true };
+    }
+  };
+
+  const approvePayment = async (id: string) => {
+    if (isFirebase) {
+      try {
+        setDataLoading(true);
+        await authFetch('/api/payments/approve', {
+          method: 'POST',
+          body: JSON.stringify({ paymentId: id })
+        });
+        await loadFirestoreData();
+      } catch (err: any) {
+        console.error('Lỗi khi duyệt học phí:', err);
+        safeAlert(`Lỗi duyệt học phí: ${err.message || String(err)}`);
+        throw err;
+      } finally {
+        setDataLoading(false);
+      }
+    } else {
+      let affectedPayment: Payment | undefined;
+      setPayments(prev => prev.map(p => {
+        if (p.id === id) {
+          affectedPayment = p;
+          return { ...p, status: 'Đã duyệt' };
+        }
+        return p;
+      }));
+
       if (affectedPayment) {
         const p = affectedPayment;
-        if (isFirebase) {
-          savePaymentDoc({ ...p, status: 'Đã duyệt' }).catch(err => console.error(err));
-        }
         setStudents(prev => prev.map(s => {
           if (s.id === p.studentId) {
             const newPaid = s.paidAmount + p.amount;
@@ -1006,69 +1049,96 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               paidAmount: newPaid,
               remainingAmount: newRemaining
             };
-            if (isFirebase) {
-              saveStudentDoc(updatedStudent).catch(err => console.error(err));
-            }
             return updatedStudent;
           }
           return s;
         }));
         addAuditLog('Duyệt học phí', `Đã xác nhận & duyệt biên lai ID ${p.id} số tiền ${p.amount.toLocaleString('vi-VN')} đ.`);
       }
-    }, 100);
+    }
   };
 
-  const cancelPayment = (id: string, reason: string) => {
+  const cancelPayment = async (id: string, reason: string) => {
     if (currentUser?.role === 'Staff') {
       safeAlert('Cố gắng từ chối: Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu.');
       return;
     }
 
-    let pObj: Payment | undefined;
-    setPayments(prev => prev.map(p => {
-      if (p.id === id) {
-        pObj = p;
-        return { ...p, isCancelled: true, cancellationReason: reason };
+    if (isFirebase) {
+      try {
+        setDataLoading(true);
+        await authFetch('/api/payments/cancel', {
+          method: 'POST',
+          body: JSON.stringify({ paymentId: id, reason })
+        });
+        await loadFirestoreData();
+      } catch (err: any) {
+        console.error('Lỗi khi hủy học phí:', err);
+        safeAlert(`Lỗi hủy học phí: ${err.message || String(err)}`);
+        throw err;
+      } finally {
+        setDataLoading(false);
       }
-      return p;
-    }));
-
-    if (pObj) {
-      const targetPay = pObj;
-      if (isFirebase) {
-        savePaymentDoc({ ...targetPay, isCancelled: true, cancellationReason: reason }).catch(err => console.error(err));
-      }
-
-      // Reverse paid amounts
-      setStudents(prev => prev.map(s => {
-        if (s.id === targetPay.studentId) {
-          const revPaid = Math.max(0, s.paidAmount - targetPay.amount);
-          const updatedStudent = {
-            ...s,
-            paidAmount: revPaid,
-            remainingAmount: Math.max(0, s.totalFee - revPaid)
-          };
-          if (isFirebase) {
-            saveStudentDoc(updatedStudent).catch(err => console.error(err));
-          }
-          return updatedStudent;
+    } else {
+      let pObj: Payment | undefined;
+      setPayments(prev => prev.map(p => {
+        if (p.id === id) {
+          pObj = p;
+          return { ...p, isCancelled: true, cancellationReason: reason };
         }
-        return s;
+        return p;
       }));
 
-      // Audit logs for payment cancellation
-      addAuditLog(
-        'Hủy Biên Lai Doanh Thu (Payment Cancelled)', 
-        `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.amount.toLocaleString('vi-VN')} đ. Lý do: ${reason}.`
-      );
+      if (pObj) {
+        const targetPay = pObj;
+        // Reverse paid amounts
+        setStudents(prev => prev.map(s => {
+          if (s.id === targetPay.studentId) {
+            const revPaid = Math.max(0, s.paidAmount - targetPay.amount);
+            const updatedStudent = {
+              ...s,
+              paidAmount: revPaid,
+              remainingAmount: Math.max(0, s.totalFee - revPaid)
+            };
+            return updatedStudent;
+          }
+          return s;
+        }));
+
+        addAuditLog(
+          'Hủy Biên Lai Doanh Thu (Payment Cancelled)', 
+          `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.amount.toLocaleString('vi-VN')} đ. Lý do: ${reason}.`
+        );
+      }
+    }
+  };
+
+  const batchConfirmLessons = async (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => {
+    if (isFirebase) {
+      try {
+        setDataLoading(true);
+        const res = await authFetch('/api/lessons/batch-confirm', {
+          method: 'POST',
+          body: JSON.stringify({ lessons: lessonsToSave, overrideReason })
+        });
+        await loadFirestoreData();
+        return res;
+      } catch (err: any) {
+        console.error('Lỗi xếp lịch hàng loạt:', err);
+        throw err;
+      } finally {
+        setDataLoading(false);
+      }
+    } else {
+      return { success: false, message: 'Batch confirm only supported in Cloud/Firebase mode' };
     }
   };
 
   // --- INSTRUCTOR ACTIONS ---
   const addInstructor = async (ins: Omit<Instructor, 'id'>) => {
     const freshIns: Instructor = {
-      id: generateUniqueId('inst'),
-      ...ins
+      ...ins,
+      id: generateUniqueId('inst')
     };
 
     setInstructors(prev => [...prev, freshIns]);
@@ -1114,9 +1184,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // --- VEHICLE ACTIONS ---
   const addVehicle = async (veh: Omit<Vehicle, 'id'>) => {
     const freshV: Vehicle = {
+      ...veh,
       id: generateUniqueId('veh'),
-      code: `XE-26-${Math.floor(1000 + Math.random() * 9000)}`,
-      ...veh
+      code: `XE-26-${Math.floor(1000 + Math.random() * 9000)}`
     };
 
     setVehicles(prev => [...prev, freshV]);
@@ -1232,7 +1302,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         deleteVehicle,
         updateSettings,
         addAuditLog,
-        resetToDefaultDemo
+        resetToDefaultDemo,
+        batchConfirmLessons,
+        authFetch
       }}
     >
       {children}

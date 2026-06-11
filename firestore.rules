@@ -173,25 +173,29 @@ service cloud.firestore {
     // 2. Students Collection
     match /students/{studentId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update, delete: if isAdmin() && isValidId(studentId) && isValidStudent(incoming());
+      allow create, update: if isAdmin() && isValidId(studentId) && isValidStudent(incoming());
+      allow delete: if isAdmin() && isValidId(studentId);
     }
 
     // 3. Instructors Collection
     match /instructors/{instructorId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update, delete: if isAdmin() && isValidId(instructorId) && isValidInstructor(incoming());
+      allow create, update: if isAdmin() && isValidId(instructorId) && isValidInstructor(incoming());
+      allow delete: if isAdmin() && isValidId(instructorId);
     }
 
     // 4. Vehicles Collection
     match /vehicles/{vehicleId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update, delete: if isAdmin() && isValidId(vehicleId) && isValidVehicle(incoming());
+      allow create, update: if isAdmin() && isValidId(vehicleId) && isValidVehicle(incoming());
+      allow delete: if isAdmin() && isValidId(vehicleId);
     }
 
     // 5. Lessons Collection
     match /lessons/{lessonId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update, delete: if isAdmin() && isValidId(lessonId) && isValidLesson(incoming());
+      allow create, update: if isAdmin() && isValidId(lessonId) && isValidLesson(incoming());
+      allow delete: if isAdmin() && isValidId(lessonId);
     }
 
     // 6. Payments Collection (Ledger Hardening - ONLY Admin, NO staff direct create/update/delete)
@@ -204,13 +208,15 @@ service cloud.firestore {
     // 7. Availability Overrides
     match /availability/{availabilityId} {
       allow read: if isAdmin() || isStaff() || isInstructor();
-      allow create, update, delete: if isAdmin() && isValidId(availabilityId) && isValidAvailability(incoming());
+      allow create, update: if isAdmin() && isValidId(availabilityId) && isValidAvailability(incoming());
+      allow delete: if isAdmin() && isValidId(availabilityId);
     }
 
     // 8. Reminders Collection
     match /reminders/{reminderId} {
       allow read: if isAdmin() || isStaff();
-      allow create, update, delete: if isAdmin() && isValidId(reminderId) && isValidReminder(incoming());
+      allow create, update: if isAdmin() && isValidId(reminderId) && isValidReminder(incoming());
+      allow delete: if isAdmin() && isValidId(reminderId);
     }
 
     // 9. Audit Logs (Append-Only)

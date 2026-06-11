@@ -80,12 +80,13 @@ export function checkLessonConflicts(
   const teacher = instructors.find(i => i.id === newLesson.instructorId);
   if (teacher) {
     // Check if within working hours
-    const teachStart = timeToMinutes(teacher.workingHours.start);
-    const teachEnd = timeToMinutes(teacher.workingHours.end);
+    const teachHours = teacher.workingHours || { start: '07:00', end: '18:00' };
+    const teachStart = timeToMinutes(teachHours.start);
+    const teachEnd = timeToMinutes(teachHours.end);
 
     if (startM < teachStart || endM > teachEnd) {
       reasons.push(
-        `Ngoài khung giờ làm việc của GV ${teacher.name} (${teacher.workingHours.start} - ${teacher.workingHours.end})`
+        `Ngoài khung giờ làm việc của GV ${teacher.name} (${teachHours.start} - ${teachHours.end})`
       );
     }
 
@@ -207,8 +208,9 @@ export function suggestAvailableSlots(
   settings: AppSettings
 ): { date: string; startTime: string; endTime: string }[] {
   const suggestions: { date: string; startTime: string; endTime: string }[] = [];
-  const startMinutes = timeToMinutes(settings.workingHours.start);
-  const endMinutes = timeToMinutes(settings.workingHours.end);
+  const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
+  const startMinutes = timeToMinutes(schoolHours.start);
+  const endMinutes = timeToMinutes(schoolHours.end);
 
   let currentDay = new Date(request.date);
 
@@ -338,9 +340,10 @@ export function runAutoSchedulingEngine(
       }
 
       // Try preferred time windows
+      const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
       const timeRanges = params.preferredTimeRanges.length > 0
         ? params.preferredTimeRanges
-        : [{ start: settings.workingHours.start, end: settings.workingHours.end }];
+        : [{ start: schoolHours.start, end: schoolHours.end }];
 
       for (const range of timeRanges) {
         const earliestMin = timeToMinutes(range.start);
@@ -455,8 +458,9 @@ export function getFreeSlotsReport(
   existingLessons: Lesson[],
   settings: AppSettings
 ): { startTime: string; endTime: string; label: string }[] {
-  const minStart = timeToMinutes(settings.workingHours.start);
-  const minEnd = timeToMinutes(settings.workingHours.end);
+  const schoolHours = settings?.workingHours || { start: '07:00', end: '18:05' };
+  const minStart = timeToMinutes(schoolHours.start);
+  const minEnd = timeToMinutes(schoolHours.end);
   const freeSlots: { startTime: string; endTime: string; label: string }[] = [];
 
   for (let m = minStart; m + durationMinutes <= minEnd; m += 30) {

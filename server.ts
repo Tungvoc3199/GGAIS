@@ -806,8 +806,8 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/create failed due to permission; starting REST fallback...");
-        if (user.role !== "Admin") {
-          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        if (!["Admin", "Staff", "Accountant"].includes(user.role)) {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản được cấp quyền (Admin, Accountant, Staff)." });
         }
         try {
           // Idempotency check
@@ -988,8 +988,8 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/approve failed due to permission; starting REST fallback...");
-        if (user.role !== "Admin") {
-          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        if (!["Admin", "Accountant"].includes(user.role)) {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin hoặc Kế toán." });
         }
         try {
           const paymentData = await restGetDoc(token, "payments", paymentId);
@@ -1356,8 +1356,8 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/reconcile-student failed due to permission; starting REST fallback...");
-        if (user.role !== "Admin") {
-          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        if (!["Admin", "Accountant"].includes(user.role)) {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin hoặc Kế toán." });
         }
         try {
           // Fetch student

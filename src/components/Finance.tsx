@@ -48,6 +48,7 @@ export const Finance: React.FC = () => {
   const [cancellingPayId, setCancellingPayId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancellingPayment, setIsCancellingPayment] = useState(false);
+  const [approvingPaymentId, setApprovingPaymentId] = useState<string | null>(null);
 
   const isApprovedActivePayment = (p: Payment) =>
     p.status === 'Đã duyệt' && p.isCancelled === false;
@@ -494,13 +495,29 @@ export const Finance: React.FC = () => {
 
                         <button
                           type="button"
-                          onClick={() => {
-                            approvePayment(p.id);
-                            alert(`Đã duyệt thành công tuyển sinh phiếu đóng ${p.amount.toLocaleString('vi-VN')} ₫ của học viên ${student?.name || ''}. Doanh thu đã cập nhật!`);
+                          disabled={approvingPaymentId !== null}
+                          onClick={async () => {
+                            if (approvingPaymentId) return;
+                            try {
+                              setApprovingPaymentId(p.id);
+                              await approvePayment(p.id);
+                              alert(
+                                `Đã duyệt thành công phiếu đóng ${p.amount.toLocaleString('vi-VN')} ₫ ` +
+                                `của học viên ${student?.name || ''}.`
+                              );
+                            } catch (error: any) {
+                              alert(`Duyệt phiếu thất bại: ${error?.message || String(error)}`);
+                            } finally {
+                              setApprovingPaymentId(null);
+                            }
                           }}
-                          className="bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-black py-2.5 px-4 rounded-xl cursor-pointer shadow-xs transition-colors uppercase tracking-wider"
+                          className={`${
+                            approvingPaymentId === p.id
+                              ? 'bg-amber-500 cursor-not-allowed opacity-80'
+                              : 'bg-emerald-600 hover:bg-emerald-700'
+                          } text-white text-[11px] font-black py-2.5 px-4 rounded-xl cursor-pointer shadow-xs transition-colors uppercase tracking-wider`}
                         >
-                          Phê duyệt
+                          {approvingPaymentId === p.id ? 'Đang duyệt...' : 'Phê duyệt'}
                         </button>
                       </div>
                     </div>

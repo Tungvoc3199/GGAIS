@@ -309,7 +309,7 @@ export const Students: React.FC<StudentsProps> = ({
   // Local Quick payment trigger from study detail
   const [quickPayAmount, setQuickPayAmount] = useState(0);
   const [quickPayMethod, setQuickPayMethod] = useState<'Tiền mặt' | 'Chuyển khoản' | 'Khác'>('Chuyển khoản');
-  const [quickPayCat, setQuickPayCat] = useState<'Đợt 1' | 'Đợt 2' | 'Đợt 3' | 'Thanh toán bổ sung'>('Đợt 2');
+  const [quickPayCat, setQuickPayCat] = useState<'Đợt 1' | 'Đợt 2' | 'Đợt 3' | 'Thanh toán bổ sung'>('Đợt 1');
 
   const selectedStudent = students.find(s => s.id === selectedStudentId);
 
@@ -561,7 +561,9 @@ export const Students: React.FC<StudentsProps> = ({
         tags: newTags,
         cccdImage: finalCccdImage,
         avatarImage: finalAvatarImage,
-        eidImage: finalEidImage
+        eidImage: finalEidImage,
+        theoryCompleted: false,
+        simulationCompleted: false
       });
 
       alert('Đăng ký tuyển sinh học viên thành công!');
@@ -1463,8 +1465,50 @@ export const Students: React.FC<StudentsProps> = ({
                     </div>
                   </div>
 
-                  <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-3 shadow-xs">
+                  <div className="bg-white p-4 rounded-2xl border border-slate-100 space-y-4 shadow-xs">
                     <h4 className="text-xs font-extrabold text-slate-800 uppercase tracking-wide">Yêu cầu đào tạo</h4>
+                    
+                    <div className="space-y-2 p-3 bg-slate-50 rounded-xl border border-slate-100">
+                      <span className="text-[10px] text-slate-400 font-bold block uppercase mb-1">Xác nhận lý thuyết & mô phỏng:</span>
+                      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          id="theory-cb"
+                          checked={!!selectedStudent.theoryCompleted}
+                          onChange={async (e) => {
+                            try {
+                              await updateStudent(selectedStudent.id, {
+                                theoryCompleted: e.target.checked
+                              });
+                            } catch (error: any) {
+                              alert(`Lưu trạng thái học Lý thuyết thất bại: ${error?.message || String(error)}`);
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span>Đã hoàn thành học Lý thuyết</span>
+                      </label>
+                      
+                      <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          id="simulation-cb"
+                          checked={!!selectedStudent.simulationCompleted}
+                          onChange={async (e) => {
+                            try {
+                              await updateStudent(selectedStudent.id, {
+                                simulationCompleted: e.target.checked
+                              });
+                            } catch (error: any) {
+                              alert(`Lưu trạng thái học Mô phỏng thất bại: ${error?.message || String(error)}`);
+                            }
+                          }}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                        />
+                        <span>Đã hoàn thành học Mô phỏng</span>
+                      </label>
+                    </div>
+
                     {(() => {
                       const reqDist = selectedStudent.licenseClass === 'B số tự động' ? 710 
                                     : selectedStudent.licenseClass === 'C1' ? 825
@@ -1475,11 +1519,17 @@ export const Students: React.FC<StudentsProps> = ({
                         ? Math.min(reqDist, Math.round((selectedStudent.completedSessions / selectedStudent.totalSessions) * reqDist))
                         : 0;
 
+                      const isTheoryDone = !!selectedStudent.theoryCompleted;
+                      const isSimDone = !!selectedStudent.simulationCompleted;
+                      const allDone = isTheoryDone && isSimDone;
+
                       return (
                         <ul className="text-xs font-bold text-slate-600 space-y-2.5">
                           <li className="flex justify-between items-center">
                             <span>Ôn lý thuyết & cabin ảo:</span>
-                            <span className="text-emerald-600 font-extrabold flex items-center gap-1">✓ Đã đạt</span>
+                            <span className={allDone ? 'text-emerald-600 font-extrabold flex items-center gap-1' : 'text-slate-500 font-bold'}>
+                              {allDone ? '✓ Đã đạt' : 'Hoàn thành học Lý thuyết'}
+                            </span>
                           </li>
                           <li className="flex justify-between items-center">
                             <span>Đào tạo đường trường thực tế (DAT):</span>

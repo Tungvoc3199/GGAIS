@@ -45,6 +45,8 @@ export interface Student {
   isArchived?: boolean;
   archivedAt?: string;
   archivedBy?: string;
+  theoryCompleted?: boolean;
+  simulationCompleted?: boolean;
 }
 
 export interface Instructor {

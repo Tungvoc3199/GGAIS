@@ -77,7 +77,9 @@ service cloud.firestore {
         && data.totalSessions is number
         && data.completedSessions is number
         && data.remainingSessions is number
-        && (!data.keys().hasAny(['tags']) || data.tags is list);
+        && (!data.keys().hasAny(['tags']) || data.tags is list)
+        && (!data.keys().hasAny(['theoryCompleted']) || data.theoryCompleted is bool)
+        && (!data.keys().hasAny(['simulationCompleted']) || data.simulationCompleted is bool);
     }
 
     function isValidInstructor(data) {
@@ -231,6 +233,14 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create, update: if isAdmin() && isValidId(settingsId);
       allow delete: if false;
+    }
+
+    // 11. Payment Installment Locks
+    match /paymentInstallmentLocks/{lockId} {
+      allow read: if isAdmin() || isStaff() || isAccountant();
+      allow create: if isAdmin() && isValidId(lockId);
+      allow update: if false;
+      allow delete: if isAdmin() && isValidId(lockId);
     }
   }
 }

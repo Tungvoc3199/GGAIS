@@ -22,7 +22,7 @@ export const Reports: React.FC = () => {
 
   // Filter payments
   const filteredPayments = payments.filter(
-    p => !p.isCancelled && p.paymentDate >= startDate && p.paymentDate <= endDate
+    p => p.status === 'Đã duyệt' && !p.isCancelled && p.paymentDate >= startDate && p.paymentDate <= endDate
   );
 
   const totalExpectedReport = filteredStudentsForReport.reduce((sum, s) => sum + s.totalFee, 0);

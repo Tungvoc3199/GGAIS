@@ -981,7 +981,22 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return { success: false, error: 'Không tìm thấy thông tin đăng ký của học viên này để đối soát thanh toán.' };
       }
 
-      const payId = generateUniqueId('pay');
+      if (newP.requestId) {
+        const existingByRequestId = payments.find(p => p.requestId === newP.requestId);
+        if (existingByRequestId) {
+          return { success: true, payment: existingByRequestId, duplicated: true } as any;
+        }
+      }
+
+      const FIXED_INSTALLMENT_CATEGORIES = ['Đợt 1', 'Đợt 2', 'Đợt 3'];
+      if (FIXED_INSTALLMENT_CATEGORIES.includes(newP.category)) {
+        const hasExisting = payments.some(p => p.studentId === newP.studentId && p.category === newP.category && !p.isCancelled);
+        if (hasExisting) {
+          return { success: false, error: `Học viên đã có biên lai ${newP.category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.` };
+        }
+      }
+
+      const payId = newP.requestId ? `pay_${newP.requestId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120)}` : generateUniqueId('pay');
       const freshPayment: Payment = {
         ...newP,
         id: payId,
@@ -1031,32 +1046,38 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setDataLoading(false);
       }
     } else {
-      let affectedPayment: Payment | undefined;
-      setPayments(prev => prev.map(p => {
-        if (p.id === id) {
-          affectedPayment = p;
-          return { ...p, status: 'Đã duyệt' };
+      const p = payments.find(item => item.id === id);
+      if (!p) {
+        throw new Error('Biên lai không tồn tại.');
+      }
+      if (p.isCancelled) {
+        throw new Error('Biên lai đã bị hủy, không thể duyệt.');
+      }
+      if (p.status === 'Đã duyệt') {
+        throw new Error('Biên lai đã được duyệt trước đó.');
+      }
+
+      setPayments(prev => prev.map(item => {
+        if (item.id === id) {
+          return { ...item, status: 'Đã duyệt' };
         }
-        return p;
+        return item;
       }));
 
-      if (affectedPayment) {
-        const p = affectedPayment;
-        setStudents(prev => prev.map(s => {
-          if (s.id === p.studentId) {
-            const newPaid = s.paidAmount + p.amount;
-            const newRemaining = Math.max(0, s.totalFee - newPaid);
-            const updatedStudent = {
-              ...s,
-              paidAmount: newPaid,
-              remainingAmount: newRemaining
-            };
-            return updatedStudent;
-          }
-          return s;
-        }));
-        addAuditLog('Duyệt học phí', `Đã xác nhận & duyệt biên lai ID ${p.id} số tiền ${p.amount.toLocaleString('vi-VN')} đ.`);
-      }
+      setStudents(prev => prev.map(s => {
+        if (s.id === p.studentId) {
+          const newPaid = s.paidAmount + p.amount;
+          const newRemaining = Math.max(0, s.totalFee - newPaid);
+          const updatedStudent = {
+            ...s,
+            paidAmount: newPaid,
+            remainingAmount: newRemaining
+          };
+          return updatedStudent;
+        }
+        return s;
+      }));
+      addAuditLog('Duyệt học phí', `Đã xác nhận & duyệt biên lai ID ${p.id} số tiền ${p.amount.toLocaleString('vi-VN')} đ.`);
     }
   };
 
@@ -1082,17 +1103,22 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setDataLoading(false);
       }
     } else {
-      let pObj: Payment | undefined;
+      const targetPay = payments.find(p => p.id === id);
+      if (!targetPay) {
+        throw new Error('Biên lai không tồn tại.');
+      }
+      if (targetPay.isCancelled) {
+        throw new Error('Biên lai đã bị hủy trước đó.');
+      }
+
       setPayments(prev => prev.map(p => {
         if (p.id === id) {
-          pObj = p;
           return { ...p, isCancelled: true, cancellationReason: reason };
         }
         return p;
       }));
 
-      if (pObj) {
-        const targetPay = pObj;
+      if (targetPay.status === 'Đã duyệt') {
         // Reverse paid amounts
         setStudents(prev => prev.map(s => {
           if (s.id === targetPay.studentId) {
@@ -1106,12 +1132,12 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           }
           return s;
         }));
-
-        addAuditLog(
-          'Hủy Biên Lai Doanh Thu (Payment Cancelled)', 
-          `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.amount.toLocaleString('vi-VN')} đ. Lý do: ${reason}.`
-        );
       }
+
+      addAuditLog(
+        'Hủy Biên Lai Doanh Thu (Payment Cancelled)', 
+        `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.status === 'Đã duyệt' ? targetPay.amount.toLocaleString('vi-VN') : 0} đ. Lý do: ${reason}.`
+      );
     }
   };
 

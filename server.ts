@@ -262,6 +262,7 @@ async function restGetDoc(token: string, collection: string, docId: string): Pro
     for (const key of Object.keys(data.fields)) {
       result[key] = unwrappedValue(data.fields[key]);
     }
+    result.__updateTime = data.updateTime;
     return result;
   } catch (error: any) {
     console.error(`Lỗi restGetDoc cho ${collection}/${docId}:`, error);
@@ -269,6 +270,57 @@ async function restGetDoc(token: string, collection: string, docId: string): Pro
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function getFirestoreDocumentName(collection: string, docId: string): string {
+  const projectId = firebaseConfig.projectId;
+  const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+  return `projects/${projectId}/databases/${databaseId}/documents/${collection}/${docId}`;
+}
+
+async function restCommit(token: string, writes: any[]): Promise<any> {
+  const projectId = firebaseConfig.projectId;
+  const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+  const url =
+    `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
+    `/databases/${encodeURIComponent(databaseId)}/documents:commit`;
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ writes })
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const err: any = new Error(
+      data?.error?.message || `Firestore REST commit failed: ${response.status}`
+    );
+    err.code = data?.error?.status || response.status;
+    throw err;
+  }
+  return data;
+}
+
+function wrapFirestoreFields(data: Record<string, any>) {
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [key, wrapFirestoreValue(value)])
+  );
+}
+
+const FIXED_INSTALLMENT_CATEGORIES = ['Đợt 1', 'Đợt 2', 'Đợt 3'] as const;
+const INSTALLMENT_KEY_BY_CATEGORY = {
+  'Đợt 1': 'dot1',
+  'Đợt 2': 'dot2',
+  'Đợt 3': 'dot3'
+} as const;
+
+function getInstallmentLockId(studentId: string, category: string): string | null {
+  const key = INSTALLMENT_KEY_BY_CATEGORY[
+    category as keyof typeof INSTALLMENT_KEY_BY_CATEGORY
+  ];
+  return key ? `${studentId}_${key}` : null;
 }
 
 async function restSetDoc(token: string, collection: string, docId: string, data: any): Promise<void> {
@@ -313,28 +365,12 @@ async function restSetDoc(token: string, collection: string, docId: string, data
 async function restListDocs(token: string, collection: string): Promise<any[]> {
   const projectId = firebaseConfig.projectId;
   const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
-  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collection)}?pageSize=300`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const baseUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collection)}?pageSize=300`;
 
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json"
-      },
-      signal: controller.signal
-    });
-
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data?.error?.message || `Lỗi restListDocs: ${response.status}`);
-    }
-
-    const documents = data.documents || [];
     const results: any[] = [];
+    let nextPageToken: string | undefined = undefined;
+    let loopCount = 0;
 
     const unwrappedValue = (valObj: any): any => {
       if (!valObj) return null;
@@ -358,21 +394,47 @@ async function restListDocs(token: string, collection: string): Promise<any[]> {
       return null;
     };
 
-    for (const doc of documents) {
-      if (!doc.fields) continue;
-      const item: any = {};
-      for (const key of Object.keys(doc.fields)) {
-        item[key] = unwrappedValue(doc.fields[key]);
+    do {
+      const url = nextPageToken ? `${baseUrl}&pageToken=${encodeURIComponent(nextPageToken)}` : baseUrl;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const response = await fetch(url, {
+          method: "GET",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json"
+          },
+          signal: controller.signal
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data?.error?.message || `Lỗi restListDocs: ${response.status}`);
+        }
+
+        const documents = data.documents || [];
+        for (const doc of documents) {
+          if (!doc.fields) continue;
+          const item: any = {};
+          for (const key of Object.keys(doc.fields)) {
+            item[key] = unwrappedValue(doc.fields[key]);
+          }
+          results.push(item);
+        }
+
+        nextPageToken = data.nextPageToken;
+      } finally {
+        clearTimeout(timeoutId);
       }
-      results.push(item);
-    }
+      loopCount++;
+    } while (nextPageToken && loopCount < 50);
 
     return results;
   } catch (error: any) {
     console.error(`Lỗi restListDocs cho ${collection}:`, error);
     throw error;
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -598,9 +660,6 @@ async function startServer() {
     }
   });
 
-  // 2. Creates payment records with safe student ledger adjustments inside firestore transaction
-  const FIXED_INSTALLMENT_CATEGORIES = ['Đợt 1', 'Đợt 2', 'Đợt 3'] as const;
-
   app.post("/api/payments/create", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
     if (!["Admin", "Staff", "Accountant"].includes(user.role)) {
@@ -624,36 +683,8 @@ async function startServer() {
     const adminDb = getAdminDb();
     const token = (req as any).userToken;
 
-    // 1. Check idempotency (requestId) using Admin SDK first (fallback will check via REST)
-    try {
-      const existingSnap = await adminDb.collection("payments").where("requestId", "==", requestId).get();
-      if (!existingSnap.empty) {
-        const existingPayment = existingSnap.docs[0].data();
-        console.log(`Idempotency hit! Request ID ${requestId} already processed.`);
-        return res.json({ success: true, payment: existingPayment, duplicated: true });
-      }
-    } catch (err: any) {
-      // If we got a permission error, we will deal with it in the catch block or handle it gracefully
-      console.log("Admin SDK check for duplicate requestId failed, check fallback logic if permission denied.");
-    }
-
-    // 2. Check duplicate fixed installment categories using Admin SDK
-    try {
-      if (FIXED_INSTALLMENT_CATEGORIES.includes(category as any)) {
-        const existingInstallmentSnap = await adminDb.collection("payments")
-          .where("studentId", "==", studentId)
-          .where("category", "==", category)
-          .get();
-        const hasExisting = existingInstallmentSnap.docs.some(doc => !doc.data().isCancelled);
-        if (hasExisting) {
-          return res.status(409).json({ error: `Học viên đã có biên lai ${category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.` });
-        }
-      }
-    } catch (err: any) {
-      console.log("Admin SDK check for duplicate installment failed, check fallback logic if permission denied.");
-    }
-
-    const payId = `pay_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const safeRequestId = requestId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+    const payId = `pay_${safeRequestId}`;
     const isStaff = user.role === "Staff";
     const shouldApproveImmediately = !isStaff && (user.role === "Admin" || user.role === "Accountant" || (category !== "Thanh toán bổ sung" && category !== "Khác"));
     const freshPayment = {
@@ -673,7 +704,13 @@ async function startServer() {
     };
 
     try {
-      await adminDb.runTransaction(async (transaction) => {
+      const txResult = await adminDb.runTransaction(async (transaction) => {
+        const paymentRef = adminDb.collection("payments").doc(payId);
+        const paymentDoc = await transaction.get(paymentRef);
+        if (paymentDoc.exists) {
+          return { status: "already_processed", payment: paymentDoc.data() };
+        }
+
         const studentRef = adminDb.collection("students").doc(studentId);
         const studentDoc = await transaction.get(studentRef);
         if (!studentDoc.exists) {
@@ -681,8 +718,26 @@ async function startServer() {
         }
         const studentData = studentDoc.data()!;
 
+        // Lock check
+        const lockId = getInstallmentLockId(studentId, category);
+        if (lockId) {
+          const lockRef = adminDb.collection("paymentInstallmentLocks").doc(lockId);
+          const lockDoc = await transaction.get(lockRef);
+          if (lockDoc.exists) {
+            const err = new Error(`Học viên đã có biên lai ${category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.`);
+            (err as any).status = 409;
+            throw err;
+          }
+          transaction.set(lockRef, {
+            id: lockId,
+            studentId,
+            category,
+            paymentId: payId,
+            createdAt: new Date().toISOString()
+          });
+        }
+
         // Save payment record
-        const paymentRef = adminDb.collection("payments").doc(payId);
         transaction.set(paymentRef, freshPayment);
 
         // Update student balances only if approved immediately
@@ -708,30 +763,30 @@ async function startServer() {
           userName: user.displayName,
           userRole: user.role
         });
+
+        return { status: "success", payment: freshPayment };
       });
 
-      return res.json({ success: true, payment: freshPayment });
+      if (txResult.status === "already_processed") {
+        return res.json({ success: true, payment: txResult.payment, duplicated: true });
+      }
+      return res.json({ success: true, payment: txResult.payment });
     } catch (error: any) {
+      if (error.status === 409 || error.code === 409 || error.message?.includes("đã có biên lai")) {
+        return res.status(409).json({ error: error.message });
+      }
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/create failed due to permission; starting REST fallback...");
+        if (user.role !== "Admin") {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        }
         try {
-          // Fetch payments via REST first to perform the checks
-          const allPayments = await restListDocs(token, "payments");
-
-          // Check duplicate requestId
-          const existingPayment = allPayments.find(p => p.requestId === requestId);
+          // Idempotency check
+          const existingPayment = await restGetDoc(token, "payments", payId);
           if (existingPayment) {
-            console.log(`Idempotency hit (REST fallback)! Request ID ${requestId} already processed.`);
+            console.log(`Idempotency hit (REST fallback with getDoc)! PayId ${payId} already processed.`);
             return res.json({ success: true, payment: existingPayment, duplicated: true });
-          }
-
-          // Check duplicate fixed installment categories
-          if (FIXED_INSTALLMENT_CATEGORIES.includes(category as any)) {
-            const hasExisting = allPayments.some(p => p.studentId === studentId && p.category === category && !p.isCancelled);
-            if (hasExisting) {
-              return res.status(409).json({ error: `Học viên đã có biên lai ${category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.` });
-            }
           }
 
           // 1. Get student document
@@ -740,22 +795,68 @@ async function startServer() {
             return res.status(404).json({ error: "Không tìm thấy học viên trong cơ sở dữ liệu." });
           }
 
-          // 2. Save payment record
-          await restSetDoc(token, "payments", payId, freshPayment);
+          // 2. Lock check
+          const lockId = getInstallmentLockId(studentId, category);
+          if (lockId) {
+            const existingLock = await restGetDoc(token, "paymentInstallmentLocks", lockId);
+            if (existingLock) {
+              return res.status(409).json({ error: `Học viên đã có biên lai ${category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.` });
+            }
+          }
 
-          // 3. Update student balances if approved immediately
+          // Assemble atomic writes
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("payments", payId),
+              fields: wrapFirestoreFields(freshPayment)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          if (lockId) {
+            writes.push({
+              update: {
+                name: getFirestoreDocumentName("paymentInstallmentLocks", lockId),
+                fields: wrapFirestoreFields({
+                  id: lockId,
+                  studentId,
+                  category,
+                  paymentId: payId,
+                  createdAt: new Date().toISOString()
+                })
+              },
+              currentDocument: {
+                exists: false
+              }
+            });
+          }
+
           if (freshPayment.status === "Đã duyệt") {
             const newPaid = Number(studentData.paidAmount || 0) + Number(amount);
             const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - newPaid);
-            const updatedFields = {
+            const updatedStudentFields = {
+              ...studentData,
               paidAmount: newPaid,
               remainingAmount: newRemaining,
               reminderStatus: "Chưa nhắc"
             };
-            await restSetDoc(token, "students", studentId, updatedFields);
+            const updateTime = studentData.__updateTime;
+            delete updatedStudentFields.__updateTime;
+
+            writes.push({
+              update: {
+                name: getFirestoreDocumentName("students", studentId),
+                fields: wrapFirestoreFields(updatedStudentFields)
+              },
+              currentDocument: {
+                updateTime: updateTime
+              }
+            });
           }
 
-          // 4. Write audit log
           const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
           const freshLog = {
             id: logId,
@@ -766,11 +867,23 @@ async function startServer() {
             userName: user.displayName,
             userRole: user.role
           };
-          await restSetDoc(token, "auditLogs", logId, freshLog);
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
 
+          await restCommit(token, writes);
           return res.json({ success: true, payment: freshPayment });
         } catch (restErr: any) {
           console.error("Giao dịch ghi thu học phí REST thất bại:", restErr);
+          if (restErr.status === 409 || restErr.code === 409 || restErr.message?.includes("ALREADY_EXISTS") || restErr.message?.includes("already exists")) {
+            return res.status(409).json({ error: `Học viên đã có biên lai ${category} đang hiệu lực. Hãy hủy phiếu cũ trước khi ghi lại.` });
+          }
           return res.status(500).json({ error: restErr.message || "Xảy ra sự cố khi ghi biên lai học phí (REST)." });
         }
       } else {
@@ -847,6 +960,9 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/approve failed due to permission; starting REST fallback...");
+        if (user.role !== "Admin") {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        }
         try {
           const paymentData = await restGetDoc(token, "payments", paymentId);
           if (!paymentData) {
@@ -870,16 +986,19 @@ async function startServer() {
             ...paymentData,
             status: "Đã duyệt"
           };
-          await restSetDoc(token, "payments", paymentId, updatedPayment);
+          const paymentUpdateTime = paymentData.__updateTime;
+          delete updatedPayment.__updateTime;
 
           // Update student ledger
           const newPaid = Number(studentData.paidAmount || 0) + Number(paymentData.amount || 0);
           const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - newPaid);
-          const updatedFields = {
+          const updatedStudentFields = {
+            ...studentData,
             paidAmount: newPaid,
             remainingAmount: newRemaining
           };
-          await restSetDoc(token, "students", paymentData.studentId, updatedFields);
+          const studentUpdateTime = studentData.__updateTime;
+          delete updatedStudentFields.__updateTime;
 
           // Write audit log
           const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -892,8 +1011,39 @@ async function startServer() {
             userName: user.displayName,
             userRole: user.role
           };
-          await restSetDoc(token, "auditLogs", logId, freshLog);
 
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("payments", paymentId),
+              fields: wrapFirestoreFields(updatedPayment)
+            },
+            currentDocument: {
+              updateTime: paymentUpdateTime
+            }
+          });
+
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", paymentData.studentId),
+              fields: wrapFirestoreFields(updatedStudentFields)
+            },
+            currentDocument: {
+              updateTime: studentUpdateTime
+            }
+          });
+
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
           return res.json({ success: true });
         } catch (restErr: any) {
           console.error("Giao dịch duyệt học phí REST thất bại:", restErr);
@@ -957,6 +1107,13 @@ async function startServer() {
           });
         }
 
+        // Delete installment lock if category is Đợt 1, 2, 3
+        const lockId = getInstallmentLockId(paymentData.studentId, paymentData.category);
+        if (lockId) {
+          const lockRef = adminDb.collection("paymentInstallmentLocks").doc(lockId);
+          transaction.delete(lockRef);
+        }
+
         const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
         const logRef = adminDb.collection("auditLogs").doc(logId);
         transaction.set(logRef, {
@@ -975,6 +1132,9 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/cancel failed due to permission; starting REST fallback...");
+        if (user.role !== "Admin") {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        }
         try {
           const paymentData = await restGetDoc(token, "payments", paymentId);
           if (!paymentData) {
@@ -996,17 +1156,49 @@ async function startServer() {
             isCancelled: true,
             cancellationReason: reason
           };
-          await restSetDoc(token, "payments", paymentId, updatedPayment);
+          const paymentUpdateTime = paymentData.__updateTime;
+          delete updatedPayment.__updateTime;
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("payments", paymentId),
+              fields: wrapFirestoreFields(updatedPayment)
+            },
+            currentDocument: {
+              updateTime: paymentUpdateTime
+            }
+          });
 
           // Reverse student ledger if already approved prior
           if (paymentData.status === "Đã duyệt") {
             const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
             const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
-            const updatedFields = {
+            const updatedStudentFields = {
+              ...studentData,
               paidAmount: revPaid,
               remainingAmount: newRemaining
             };
-            await restSetDoc(token, "students", paymentData.studentId, updatedFields);
+            const studentUpdateTime = studentData.__updateTime;
+            delete updatedStudentFields.__updateTime;
+
+            writes.push({
+              update: {
+                name: getFirestoreDocumentName("students", paymentData.studentId),
+                fields: wrapFirestoreFields(updatedStudentFields)
+              },
+              currentDocument: {
+                updateTime: studentUpdateTime
+              }
+            });
+          }
+
+          // Delete installment lock if category is Đợt 1, 2, 3
+          const lockId = getInstallmentLockId(paymentData.studentId, paymentData.category);
+          if (lockId) {
+            writes.push({
+              delete: getFirestoreDocumentName("paymentInstallmentLocks", lockId)
+            });
           }
 
           // Write audit log
@@ -1020,8 +1212,17 @@ async function startServer() {
             userName: user.displayName,
             userRole: user.role
           };
-          await restSetDoc(token, "auditLogs", logId, freshLog);
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
 
+          await restCommit(token, writes);
           return res.json({ success: true });
         } catch (restErr: any) {
           console.error("Giao dịch hủy học phí REST thất bại:", restErr);
@@ -1092,6 +1293,9 @@ async function startServer() {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
         console.log("adminDb transaction in payments/reconcile-student failed due to permission; starting REST fallback...");
+        if (user.role !== "Admin") {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+        }
         try {
           // Fetch student
           const studentData = await restGetDoc(token, "students", studentId);
@@ -1107,10 +1311,12 @@ async function startServer() {
           const remainingAmount = Math.max(0, Number(studentData.totalFee || 0) - paidAmount);
 
           const updatedFields = {
+            ...studentData,
             paidAmount,
             remainingAmount
           };
-          await restSetDoc(token, "students", studentId, updatedFields);
+          const studentUpdateTime = studentData.__updateTime;
+          delete updatedFields.__updateTime;
 
           // Write audit log
           const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
@@ -1123,8 +1329,29 @@ async function startServer() {
             userName: user.displayName,
             userRole: user.role
           };
-          await restSetDoc(token, "auditLogs", logId, freshLog);
 
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", studentId),
+              fields: wrapFirestoreFields(updatedFields)
+            },
+            currentDocument: {
+              updateTime: studentUpdateTime
+            }
+          });
+
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
           return res.json({ success: true, paidAmount, remainingAmount });
         } catch (restErr: any) {
           console.error("Giao dịch đối soát công nợ học viên REST thất bại:", restErr);

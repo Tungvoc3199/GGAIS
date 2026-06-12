@@ -47,11 +47,18 @@ export const Finance: React.FC = () => {
   // Cancel transaction modal tracking
   const [cancellingPayId, setCancellingPayId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState('');
+  const [isCancellingPayment, setIsCancellingPayment] = useState(false);
+
+  const isApprovedActivePayment = (p: Payment) =>
+    p.status === 'Đã duyệt' && p.isCancelled === false;
 
   // 1. Calculate general financial metrics (excluding pending approvals)
   const totalExpected = students.reduce((sum, s) => sum + s.totalFee, 0);
-  const totalCollected = payments.filter(p => !p.isCancelled && p.status !== 'Chờ duyệt').reduce((sum, p) => sum + p.amount, 0);
-  const totalDebt = students.reduce((sum, s) => sum + s.remainingAmount, 0);
+  const totalCollected = payments.filter(isApprovedActivePayment).reduce((sum, p) => sum + p.amount, 0);
+
+  const computedDebt = Math.max(0, totalExpected - totalCollected);
+  const cachedDebt = students.reduce((sum, s) => sum + s.remainingAmount, 0);
+  const hasDebtMismatch = cachedDebt !== computedDebt;
 
   const getTodayString = () => {
     const d = new Date();
@@ -64,7 +71,7 @@ export const Finance: React.FC = () => {
 
   // Today Revenue
   const todayRevenue = payments
-    .filter(p => !p.isCancelled && p.status !== 'Chờ duyệt' && p.paymentDate === TODAY)
+    .filter(p => isApprovedActivePayment(p) && p.paymentDate === TODAY)
     .reduce((sum, p) => sum + p.amount, 0);
 
   // This Week (Last 7 days)
@@ -79,13 +86,13 @@ export const Finance: React.FC = () => {
   const sevenDaysAgo = getNDaysAgoString(7);
 
   const weekRevenue = payments
-    .filter(p => !p.isCancelled && p.status !== 'Chờ duyệt' && p.paymentDate >= sevenDaysAgo && p.paymentDate <= TODAY)
+    .filter(p => isApprovedActivePayment(p) && p.paymentDate >= sevenDaysAgo && p.paymentDate <= TODAY)
     .reduce((sum, p) => sum + p.amount, 0);
 
   // This Month
   const currentMonthStr = TODAY.substring(0, 7);
   const monthRevenue = payments
-    .filter(p => !p.isCancelled && p.status !== 'Chờ duyệt' && p.paymentDate.startsWith(currentMonthStr))
+    .filter(p => isApprovedActivePayment(p) && p.paymentDate.startsWith(currentMonthStr))
     .reduce((sum, p) => sum + p.amount, 0);
 
   // Overdue students list (with remaining debt and deadline past TODAY)
@@ -99,7 +106,7 @@ export const Finance: React.FC = () => {
 
   // Generate the last 6 months dynamically based on TODAY's date to ensure continuous representation
   const getMonthlyTrendData = () => {
-    const approvedPayments = payments.filter(p => !p.isCancelled && p.status !== 'Chờ duyệt');
+    const approvedPayments = payments.filter(isApprovedActivePayment);
     
     // Create map of existing payments
     const monthlyMap: { [key: string]: number } = {};
@@ -169,11 +176,20 @@ export const Finance: React.FC = () => {
     setCancelReason('');
   };
 
-  const handleConfirmCancel = () => {
-    if (!cancellingPayId || !cancelReason) return;
-    cancelPayment(cancellingPayId, cancelReason);
-    setCancellingPayId(null);
-    alert('Hóa đơn đã được hủy. Số nợ của học viên tương ứng đã được hoàn trả ban đầu.');
+  const handleConfirmCancel = async () => {
+    if (!cancellingPayId || !cancelReason.trim() || isCancellingPayment) return;
+
+    try {
+      setIsCancellingPayment(true);
+      await cancelPayment(cancellingPayId, cancelReason.trim());
+      setCancellingPayId(null);
+      setCancelReason('');
+      alert('Hóa đơn đã được hủy thành công. Công nợ đã được đối soát lại.');
+    } catch (error: any) {
+      alert(`Hủy phiếu thất bại: ${error?.message || String(error)}`);
+    } finally {
+      setIsCancellingPayment(false);
+    }
   };
 
   const pendingCount = payments.filter(p => !p.isCancelled && p.status === 'Chờ duyệt').length;
@@ -223,8 +239,13 @@ export const Finance: React.FC = () => {
           </div>
           <div>
             <span className="text-[10px] font-black text-slate-400 block uppercase tracking-wider">Dư nợ Phải Thu (Cần thu)</span>
-            <div className="text-xl font-mono font-black text-red-600">{totalDebt.toLocaleString('vi-VN')} ₫</div>
-            <span className="text-[10px] text-red-500 font-bold">Chiếm {(100 - (totalCollected / totalExpected) * 100).toFixed(1)}% tổng giá trị hồ sơ</span>
+            <div className="text-xl font-mono font-black text-red-600">{computedDebt.toLocaleString('vi-VN')} ₫</div>
+            <span className="text-[10px] text-red-500 font-bold block">Chiếm {(100 - (totalCollected / totalExpected) * 100).toFixed(1)}% tổng giá trị hồ sơ</span>
+            {hasDebtMismatch && (
+              <span className="text-[10px] text-amber-600 font-bold block mt-1 leading-normal bg-amber-50 px-2 py-1 rounded border border-amber-100">
+                ⚠ Dữ liệu công nợ học viên cần đối soát lại
+              </span>
+            )}
           </div>
         </div>
 
@@ -348,15 +369,39 @@ export const Finance: React.FC = () => {
                   <th className="py-3 px-4">Ngày nộp</th>
                   <th className="py-3 px-4">Số tiền</th>
                   <th className="py-3 px-4">Hạng mục thu</th>
+                  <th className="py-3 px-4">Trạng thái</th>
                   <th className="py-3 px-4">Cán bộ lập phiếu</th>
                   <th className="py-3 px-4">Thao tác hủy</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-slate-700">
                 {payments
-                  .sort((a,b)=> b.createdAt.localeCompare(a.createdAt))
+                   .sort((a,b)=> b.createdAt.localeCompare(a.createdAt))
                   .map((p) => {
                     const student = students.find(s => s.id === p.studentId);
+                    
+                    // Determine state
+                    let statusBadge = null;
+                    if (p.isCancelled) {
+                      statusBadge = (
+                        <span className="text-[10px] text-red-600 bg-red-50 border border-red-100 px-2 py-0.5 rounded-md font-bold">
+                          Đã hủy
+                        </span>
+                      );
+                    } else if (p.status === 'Đã duyệt') {
+                      statusBadge = (
+                        <span className="text-[10px] text-emerald-600 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded-md font-bold">
+                          ✓ Đã duyệt
+                        </span>
+                      );
+                    } else {
+                      statusBadge = (
+                        <span className="text-[10px] text-amber-600 bg-amber-50 border border-amber-100 px-2 py-0.5 rounded-md font-bold">
+                          ⏳ Chờ duyệt
+                        </span>
+                      );
+                    }
+
                     return (
                       <tr key={p.id} className={p.isCancelled ? 'bg-slate-50/50 opacity-60' : 'hover:bg-slate-50/30'}>
                         <td className="py-3 px-4 font-mono text-[10px] text-slate-450">{p.id}</td>
@@ -375,13 +420,10 @@ export const Finance: React.FC = () => {
                           </span>
                         </td>
                         <td className="py-3 px-4 font-semibold text-slate-655">{p.category}</td>
+                        <td className="py-3 px-4">{statusBadge}</td>
                         <td className="py-3 px-4 font-semibold text-slate-500">{p.receiver}</td>
                         <td className="py-3 px-4 text-center">
-                          {p.isCancelled ? (
-                            <span className="text-[9px] text-red-500 bg-red-50 border border-red-150 px-2 py-0.5 rounded-full font-bold uppercase" title={p.cancellationReason}>
-                              Đã Hủy
-                            </span>
-                          ) : (
+                          {!p.isCancelled && (currentUser?.role === 'Admin' || currentUser?.role === 'Accountant') && (
                             <button
                               onClick={() => handleTriggerCancel(p.id)}
                               className="text-[10px] text-red-600 hover:bg-red-50 hover:border-red-200 border border-transparent px-2 py-1 rounded-md transition-all cursor-pointer"
@@ -594,16 +636,17 @@ export const Finance: React.FC = () => {
             <div className="flex justify-end gap-2 pt-2 text-xs font-bold">
               <button
                 onClick={() => setCancellingPayId(null)}
-                className="bg-slate-100 text-slate-755 hover:bg-slate-200 px-3.5 py-2 rounded-xl cursor-pointer"
+                disabled={isCancellingPayment}
+                className="bg-slate-100 text-slate-755 hover:bg-slate-200 px-3.5 py-2 rounded-xl cursor-pointer disabled:opacity-55"
               >
                 Trở về
               </button>
               <button
                 onClick={handleConfirmCancel}
-                disabled={!cancelReason}
+                disabled={!cancelReason || isCancellingPayment}
                 className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl cursor-pointer shadow-xs"
               >
-                ✓ Đồng ý Hủy Phiếu
+                {isCancellingPayment ? 'Đang hủy phiếu...' : '✓ Đồng ý Hủy Phiếu'}
               </button>
             </div>
           </div>

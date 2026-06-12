@@ -107,7 +107,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate, onOpenQuickFor
   // Revenue collected this current simulated month
   const currentMonthStr = TODAY.substring(0, 7);
   const juneRevenue = payments
-    .filter(p => !p.isCancelled && p.paymentDate.startsWith(currentMonthStr))
+    .filter(p => p.status === 'Đã duyệt' && !p.isCancelled && p.paymentDate.startsWith(currentMonthStr))
     .reduce((sum, p) => sum + p.amount, 0);
 
   // Total student debt

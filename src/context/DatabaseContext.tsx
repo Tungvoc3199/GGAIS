@@ -93,6 +93,7 @@ interface DatabaseContextType {
   addPayment: (payment: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => Promise<{ success: boolean; error?: string }>;
   cancelPayment: (id: string, reason: string) => Promise<void>;
   approvePayment: (id: string) => Promise<void>;
+  reconcileStudentPayments: (studentId: string) => Promise<{ success: boolean; paidAmount?: number; remainingAmount?: number; error?: string }>;
   batchConfirmLessons: (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => Promise<{ success: boolean; committedCount?: number; hasConflicts?: boolean; conflicts?: any[]; message?: string }>;
   authFetch: (url: string, options?: RequestInit) => Promise<any>;
   // Instructor Actions
@@ -1114,6 +1115,49 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const reconcileStudentPayments = async (studentId: string) => {
+    if (isFirebase) {
+      try {
+        setDataLoading(true);
+        const data = await authFetch('/api/payments/reconcile-student', {
+          method: 'POST',
+          body: JSON.stringify({ studentId })
+        });
+        await loadFirestoreData();
+        return { success: true, paidAmount: data.paidAmount, remainingAmount: data.remainingAmount };
+      } catch (err: any) {
+        console.error('Lỗi khi đối soát học phí:', err);
+        safeAlert(`Lỗi đối soát học phí: ${err.message || String(err)}`);
+        return { success: false, error: err.message || String(err) };
+      } finally {
+        setDataLoading(false);
+      }
+    } else {
+      const student = students.find(s => s.id === studentId);
+      if (!student) {
+        return { success: false, error: 'Không tìm thấy thông tin đăng ký của học viên này.' };
+      }
+
+      const validPayments = payments.filter(p => p.studentId === studentId && p.status === 'Đã duyệt' && p.isCancelled === false);
+      const paidAmount = validPayments.reduce((sum, p) => sum + Number(p.amount || 0), 0);
+      const remainingAmount = Math.max(0, student.totalFee - paidAmount);
+
+      setStudents(prev => prev.map(s => {
+        if (s.id === studentId) {
+          return {
+            ...s,
+            paidAmount,
+            remainingAmount
+          };
+        }
+        return s;
+      }));
+
+      addAuditLog('Đối soát công nợ', `Thành công đối soát lại công nợ học viên ${student.name}: Đã nộp ${paidAmount.toLocaleString('vi-VN')} đ, còn lại ${remainingAmount.toLocaleString('vi-VN')} đ.`);
+      return { success: true, paidAmount, remainingAmount };
+    }
+  };
+
   const batchConfirmLessons = async (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => {
     if (isFirebase) {
       try {
@@ -1296,6 +1340,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         addPayment,
         cancelPayment,
         approvePayment,
+        reconcileStudentPayments,
         addInstructor,
         updateInstructor,
         addVehicle,

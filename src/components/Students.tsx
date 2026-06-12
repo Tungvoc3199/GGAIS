@@ -63,6 +63,7 @@ export const Students: React.FC<StudentsProps> = ({
     deleteStudent,
     archiveStudent,
     addPayment,
+    reconcileStudentPayments,
     addAuditLog,
     authFetch,
     isFirebase
@@ -223,10 +224,39 @@ export const Students: React.FC<StudentsProps> = ({
   const [isSendingNotif, setIsSendingNotif] = useState<boolean>(false);
   const [notifTriggerCount, setNotifTriggerCount] = useState<number>(0);
 
+  const courseDefaultsByLicense = {
+    A1: {
+      courseType: 'Trọn gói hạng A1',
+      totalFee: 0,
+      totalSessions: 2
+    },
+    A: {
+      courseType: 'Trọn gói hạng A',
+      totalFee: 0,
+      totalSessions: 2
+    },
+    'B số tự động': {
+      courseType: 'Trọn gói hạng B số tự động',
+      totalFee: 12500000,
+      totalSessions: 14
+    },
+    'B số sàn': {
+      courseType: 'Trọn gói hạng B số sàn',
+      totalFee: 11000000,
+      totalSessions: 20
+    },
+    C1: {
+      courseType: 'Trọn gói hạng C1',
+      totalFee: 13500000,
+      totalSessions: 16
+    }
+  } as const;
+
   // New Student State
   const [isAdding, setIsAdding] = useState(false);
   const [isWaitlist, setIsWaitlist] = useState(false);
   const [isCreatingStudent, setIsCreatingStudent] = useState(false);
+  const [isSubmittingPayment, setIsSubmittingPayment] = useState(false);
 
   useEffect(() => {
     if (quickFormOpen && quickFormType === 'student') {
@@ -241,7 +271,7 @@ export const Students: React.FC<StudentsProps> = ({
   const [newDob, setNewDob] = useState('1998-01-01');
   const [newAddress, setNewAddress] = useState('');
   const [newLicenseClass, setNewLicenseClass] = useState<'A1' | 'A' | 'B số tự động' | 'B số sàn' | 'C1'>('B số tự động');
-  const [newCourseType, setNewCourseType] = useState('Trọn gói hạng B1');
+  const [newCourseType, setNewCourseType] = useState('Trọn gói hạng B số tự động');
   const [newTotalFee, setNewTotalFee] = useState(15000000);
   const [newTotalSessions, setNewTotalSessions] = useState(14);
   const [newInstructorId, setNewInstructorId] = useState('inst_2');
@@ -571,10 +601,21 @@ export const Students: React.FC<StudentsProps> = ({
 
   const handleQuickPaymentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedStudent) return;
+    if (!selectedStudent || isSubmittingPayment) return;
     if (quickPayAmount <= 0) {
       alert('Vui lòng nhập số tiền thanh toán thực tế.');
       return;
+    }
+
+    const FIXED_INSTALLMENT_CATEGORIES = ['Đợt 1', 'Đợt 2', 'Đợt 3'];
+    if (FIXED_INSTALLMENT_CATEGORIES.includes(quickPayCat)) {
+      const hasExisting = payments.some(
+        p => p.studentId === selectedStudent.id && p.category === quickPayCat && !p.isCancelled
+      );
+      if (hasExisting) {
+        alert(`Học viên đã hoàn tất ${quickPayCat} trước đó. Hãy chọn 'Thanh toán bổ sung' hoặc hạng mục khác.`);
+        return;
+      }
     }
 
     if (quickPayAmount > selectedStudent.remainingAmount) {
@@ -584,22 +625,31 @@ export const Students: React.FC<StudentsProps> = ({
       if (!confirmOverpay) return;
     }
 
-    const res = await addPayment({
-      studentId: selectedStudent.id,
-      paymentDate: getLocalTodayString(),
-      amount: quickPayAmount,
-      method: quickPayMethod,
-      category: quickPayCat,
-      receiver: currentUser?.displayName || 'Thu ngân tự động',
-      notes: `Thu nhanh từ bảng học viên: ${quickPayCat}`,
-      status: 'Chờ duyệt' // Staff adds, will be 'Chờ duyệt'. Admin will automatically approve/pre-approve if allowed.
-    });
+    try {
+      setIsSubmittingPayment(true);
+      const requestId = "req_" + Date.now() + "_" + Math.random().toString(36).substring(2, 8);
+      const res = await addPayment({
+        studentId: selectedStudent.id,
+        paymentDate: getLocalTodayString(),
+        amount: quickPayAmount,
+        method: quickPayMethod,
+        category: quickPayCat,
+        receiver: currentUser?.displayName || 'Thu ngân tự động',
+        notes: `Thu nhanh từ bảng học viên: ${quickPayCat}`,
+        status: 'Chờ duyệt',
+        requestId
+      });
 
-    if (res.success) {
-      setQuickPayAmount(0);
-      alert('Gửi yêu cầu thu nợ học phí thành công! Biên lai đã được chuyển tới bộ phận kế toán.');
-    } else {
-      alert(res.error || 'Có lỗi phát sinh trong quá trình thanh toán.');
+      if (res.success) {
+        setQuickPayAmount(0);
+        alert('Gửi yêu cầu thu nợ học phí thành công! Biên lai đã được chuyển tới bộ phận kế toán.');
+      } else {
+        alert(res.error || 'Có lỗi phát sinh trong quá trình thanh toán.');
+      }
+    } catch (err: any) {
+      alert(`Giao dịch ghi thu học phí thất bại: ${err?.message || String(err)}`);
+    } finally {
+      setIsSubmittingPayment(false);
     }
   };
 
@@ -1538,6 +1588,28 @@ export const Students: React.FC<StudentsProps> = ({
                         {new Date(selectedStudent.nextPaymentDeadline).toLocaleDateString('vi-VN')}
                       </span>
                     </div>
+
+                    {(currentUser?.role === 'Admin' || currentUser?.role === 'Accountant') && (
+                      <button
+                        onClick={async () => {
+                          if (window.confirm(`Bạn có chắc chắn muốn đối soát lại toàn bộ công nợ của học viên ${selectedStudent.name} từ nguồn sổ cái thực tế?`)) {
+                            try {
+                              const result = await reconcileStudentPayments(selectedStudent.id);
+                              if (result.success) {
+                                alert(`Đối soát thành công!\n- Số tiền đã nộp hợp lệ: ${result.paidAmount?.toLocaleString('vi-VN')} ₫\n- Dư nợ mới thực tế: ${result.remainingAmount?.toLocaleString('vi-VN')} ₫`);
+                              } else {
+                                alert(`Đối soát thất bại: ${result.error}`);
+                              }
+                            } catch (err: any) {
+                              alert(`Lỗi khi đối soát: ${err.message || String(err)}`);
+                            }
+                          }
+                        }}
+                        className="w-full mt-2 bg-blue-50 border border-blue-200 text-blue-700 hover:bg-blue-100 font-bold py-2 px-3 rounded-xl transition-colors cursor-pointer text-xs font-sans"
+                      >
+                        🔄 Đối soát lại công nợ
+                      </button>
+                    )}
                   </div>
 
                   {/* Payment controls */}
@@ -1581,9 +1653,15 @@ export const Students: React.FC<StudentsProps> = ({
                               onChange={(e) => setQuickPayCat(e.target.value as any)}
                               className="w-full bg-slate-50 border border-slate-200 text-slate-800 py-2 px-3 rounded-lg text-xs font-bold"
                             >
-                              <option value="Đợt 1">Nộp Đợt 1</option>
-                              <option value="Đợt 2">Nộp Đợt 2</option>
-                              <option value="Đợt 3">Nộp Đợt 3</option>
+                              <option value="Đợt 1" disabled={payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 1' && !p.isCancelled)}>
+                                {payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 1' && !p.isCancelled) ? '[Đã thu] Đợt 1' : 'Nộp Đợt 1'}
+                              </option>
+                              <option value="Đợt 2" disabled={payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 2' && !p.isCancelled)}>
+                                {payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 2' && !p.isCancelled) ? '[Đã thu] Đợt 2' : 'Nộp Đợt 2'}
+                              </option>
+                              <option value="Đợt 3" disabled={payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 3' && !p.isCancelled)}>
+                                {payments.some(p => p.studentId === selectedStudent.id && p.category === 'Đợt 3' && !p.isCancelled) ? '[Đã thu] Đợt 3' : 'Nộp Đợt 3'}
+                              </option>
                               <option value="Thanh toán bổ sung">Nộp Bổ Sung</option>
                             </select>
                           </div>
@@ -1591,9 +1669,10 @@ export const Students: React.FC<StudentsProps> = ({
                           <div className="flex items-end">
                             <button
                               type="submit"
-                              className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-3 rounded-lg text-xs cursor-pointer shadow-xs"
+                              disabled={isSubmittingPayment}
+                              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold py-2.5 px-3 rounded-lg text-xs cursor-pointer shadow-xs"
                             >
-                              ✓ Ghi biên lai
+                              {isSubmittingPayment ? 'Đang ghi nhận...' : '✓ Ghi biên lai'}
                             </button>
                           </div>
                         </div>
@@ -1615,18 +1694,44 @@ export const Students: React.FC<StudentsProps> = ({
                     ) : (
                       payments
                         .filter(p => p.studentId === selectedStudent.id)
-                        .map((pay) => (
-                          <div key={pay.id} className="p-3 bg-white rounded-xl border border-slate-100 text-xs font-bold flex justify-between items-center">
-                            <div>
-                              <div className="text-slate-850">{pay.category} ({pay.method})</div>
-                              <div className="text-[10px] text-slate-400 font-medium">Lập ngày: {new Date(pay.paymentDate).toLocaleDateString('vi-VN')} by {pay.receiver}</div>
-                              {pay.isCancelled && <span className="text-[9px] text-red-500 block mt-0.5 uppercase">Đã Hủy: {pay.cancellationReason}</span>}
+                        .map((pay) => {
+                          let statusBadge = null;
+                          if (pay.isCancelled) {
+                            statusBadge = (
+                              <span className="bg-red-50 text-red-650 border border-red-100 text-[9px] px-1.5 py-0.5 rounded-md font-bold uppercase ml-2 select-none">
+                                Đã hủy
+                              </span>
+                            );
+                          } else if (pay.status === 'Đã duyệt') {
+                            statusBadge = (
+                              <span className="bg-emerald-50 text-emerald-650 border border-emerald-100 text-[9px] px-1.5 py-0.5 rounded-md font-bold uppercase ml-2 select-none">
+                                Đã duyệt
+                              </span>
+                            );
+                          } else {
+                            statusBadge = (
+                              <span className="bg-amber-50 text-amber-650 border border-amber-100 text-[9px] px-1.5 py-0.5 rounded-md font-bold uppercase ml-2 select-none">
+                                Chờ duyệt
+                              </span>
+                            );
+                          }
+
+                          return (
+                            <div key={pay.id} className="p-3 bg-white rounded-xl border border-slate-100 text-xs font-bold flex justify-between items-center">
+                              <div>
+                                <div className="flex items-center">
+                                  <div className="text-slate-850">{pay.category} ({pay.method})</div>
+                                  {statusBadge}
+                                </div>
+                                <div className="text-[10px] text-slate-400 font-medium">Lập ngày: {new Date(pay.paymentDate).toLocaleDateString('vi-VN')} by {pay.receiver}</div>
+                                {pay.isCancelled && <span className="text-[9px] text-red-500 block mt-0.5 uppercase">Đã Hủy: {pay.cancellationReason}</span>}
+                              </div>
+                              <span className={pay.isCancelled ? 'text-slate-400 line-through shrink-0' : 'text-emerald-600 shrink-0'}>
+                                {pay.isCancelled ? '-' : '+'} {pay.amount.toLocaleString('vi-VN')} ₫
+                              </span>
                             </div>
-                            <span className={pay.isCancelled ? 'text-slate-400 line-through shrink-0' : 'text-emerald-600 shrink-0'}>
-                              {pay.isCancelled ? '-' : '+'} {pay.amount.toLocaleString('vi-VN')} ₫
-                            </span>
-                          </div>
-                        ))
+                          );
+                        })
                     )}
                   </div>
                 </div>
@@ -2101,25 +2206,14 @@ export const Students: React.FC<StudentsProps> = ({
                   <select
                     value={newLicenseClass}
                     onChange={(e) => {
-                      const val = e.target.value as any;
+                      const val = e.target.value as keyof typeof courseDefaultsByLicense;
                       setNewLicenseClass(val);
-                      // Auto populate defaults for license types
-                      if (val === 'B số tự động') {
-                        setNewCourseType('Trọn gói hạng B1');
-                        setNewTotalFee(15000000);
-                        setNewTotalSessions(14);
-                      } else if (val === 'B số sàn') {
-                        setNewCourseType('Trọn gói hạng B2');
-                        setNewTotalFee(14000000);
-                        setNewTotalSessions(12);
-                      } else if (val === 'C1') {
-                        setNewCourseType('Hạng C');
-                        setNewTotalFee(18000000);
-                        setNewTotalSessions(16);
-                      } else {
-                        setNewCourseType('Trọn gói hạng A1');
-                        setNewTotalFee(2500000);
-                        setNewTotalSessions(2);
+                      // Auto populate defaults from mapping
+                      const defaults = courseDefaultsByLicense[val];
+                      if (defaults) {
+                        setNewCourseType(defaults.courseType);
+                        setNewTotalFee(defaults.totalFee);
+                        setNewTotalSessions(defaults.totalSessions);
                       }
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-slate-800 text-xs"

@@ -133,6 +133,7 @@ export interface Payment {
   createdAt: string; // ISO String
   createdBy: string; // User Name / Email
   status?: 'Chờ duyệt' | 'Đã duyệt';
+  requestId?: string;
 }
 
 export interface AuditLog {

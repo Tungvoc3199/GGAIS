@@ -179,13 +179,12 @@ export const Finance: React.FC = () => {
 
   const handleConfirmCancel = async () => {
     if (!cancellingPayId || !cancelReason.trim() || isCancellingPayment) return;
-
     try {
       setIsCancellingPayment(true);
       await cancelPayment(cancellingPayId, cancelReason.trim());
       setCancellingPayId(null);
-      setCancelReason('');
-      alert('Hóa đơn đã được hủy thành công. Công nợ đã được đối soát lại.');
+      setCancelReason("");
+      alert("Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.");
     } catch (error: any) {
       alert(`Hủy phiếu thất bại: ${error?.message || String(error)}`);
     } finally {
@@ -660,7 +659,7 @@ export const Finance: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmCancel}
-                disabled={!cancelReason || isCancellingPayment}
+                disabled={isCancellingPayment}
                 className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl cursor-pointer shadow-xs"
               >
                 {isCancellingPayment ? 'Đang hủy phiếu...' : '✓ Đồng ý Hủy Phiếu'}

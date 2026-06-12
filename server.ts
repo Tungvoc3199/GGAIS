@@ -284,23 +284,30 @@ async function restCommit(token: string, writes: any[]): Promise<any> {
   const url =
     `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
     `/databases/${encodeURIComponent(databaseId)}/documents:commit`;
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ writes })
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    const err: any = new Error(
-      data?.error?.message || `Firestore REST commit failed: ${response.status}`
-    );
-    err.code = data?.error?.status || response.status;
-    throw err;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      signal: controller.signal,
+      body: JSON.stringify({ writes })
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      const err: any = new Error(
+        data?.error?.message || `Firestore REST commit failed: ${response.status}`
+      );
+      err.code = data?.error?.status || response.status;
+      throw err;
+    }
+    return data;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return data;
 }
 
 function wrapFirestoreFields(data: Record<string, any>) {
@@ -1056,6 +1063,19 @@ async function startServer() {
     }
   });
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), timeoutMs);
+    })
+  ]);
+}
+
   // 4. Cancels payments securely, reversing balances on student document in transaction
   app.post("/api/payments/cancel", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
@@ -1072,68 +1092,80 @@ async function startServer() {
 
     const token = (req as any).userToken;
     try {
-      await adminDb.runTransaction(async (transaction) => {
-        const paymentRef = adminDb.collection("payments").doc(paymentId);
-        const paymentDoc = await transaction.get(paymentRef);
-        if (!paymentDoc.exists) {
-          throw new Error("Không tìm thấy chứng từ cần hủy.");
-        }
-        const paymentData = paymentDoc.data()!;
+      await withTimeout(
+        adminDb.runTransaction(async (transaction) => {
+          const paymentRef = adminDb.collection("payments").doc(paymentId);
+          const paymentDoc = await transaction.get(paymentRef);
+          if (!paymentDoc.exists) {
+            throw new Error("Không tìm thấy chứng từ cần hủy.");
+          }
+          const paymentData = paymentDoc.data()!;
 
-        if (paymentData.isCancelled) {
-          throw new Error("Biên lai học phí đã được hủy trước đó.");
-        }
+          if (paymentData.isCancelled) {
+            throw new Error("Biên lai học phí đã được hủy trước đó.");
+          }
 
-        const studentRef = adminDb.collection("students").doc(paymentData.studentId);
-        const studentDoc = await transaction.get(studentRef);
-        if (!studentDoc.exists) {
-          throw new Error("Học viên sở hữu biên lai không tồn tại.");
-        }
-        const studentData = studentDoc.data()!;
+          const studentRef = adminDb.collection("students").doc(paymentData.studentId);
+          const studentDoc = await transaction.get(studentRef);
+          if (!studentDoc.exists) {
+            throw new Error("Học viên sở hữu biên lai không tồn tại.");
+          }
+          const studentData = studentDoc.data()!;
 
-        // Update payment cancellation values
-        transaction.update(paymentRef, {
-          isCancelled: true,
-          cancellationReason: reason
-        });
-
-        // Safely reverse student ledger if already approved prior
-        if (paymentData.status === "Đã duyệt") {
-          const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
-          const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
-          transaction.update(studentRef, {
-            paidAmount: revPaid,
-            remainingAmount: newRemaining
+          // Update payment cancellation values
+          transaction.update(paymentRef, {
+            isCancelled: true,
+            cancellationReason: reason
           });
-        }
 
-        // Delete installment lock if category is Đợt 1, 2, 3
-        const lockId = getInstallmentLockId(paymentData.studentId, paymentData.category);
-        if (lockId) {
-          const lockRef = adminDb.collection("paymentInstallmentLocks").doc(lockId);
-          transaction.delete(lockRef);
-        }
+          // Safely reverse student ledger if already approved prior
+          if (paymentData.status === "Đã duyệt") {
+            const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
+            const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
+            transaction.update(studentRef, {
+              paidAmount: revPaid,
+              remainingAmount: newRemaining
+            });
+          }
 
-        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const logRef = adminDb.collection("auditLogs").doc(logId);
-        transaction.set(logRef, {
-          id: logId,
-          timestamp: new Date().toISOString(),
-          action: "Hủy Biên Lai Doanh Thu",
-          details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason} [Giao dịch Server].`,
-          userId: user.uid,
-          userName: user.displayName,
-          userRole: user.role
-        });
-      });
+          // Delete installment lock if category is Đợt 1, 2, 3
+          const lockId = getInstallmentLockId(paymentData.studentId, paymentData.category);
+          if (lockId) {
+            const lockRef = adminDb.collection("paymentInstallmentLocks").doc(lockId);
+            transaction.delete(lockRef);
+          }
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const logRef = adminDb.collection("auditLogs").doc(logId);
+          transaction.set(logRef, {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Hủy Biên Lai Doanh Thu",
+            details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason} [Giao dịch Server].`,
+            userId: user.uid,
+            userName: user.displayName,
+            userRole: user.role
+          });
+        }),
+        4000,
+        "ADMIN_TRANSACTION_TIMEOUT"
+      );
 
       return res.json({ success: true });
     } catch (error: any) {
-      const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
-      if (isPermissionError && token) {
-        console.log("adminDb transaction in payments/cancel failed due to permission; starting REST fallback...");
-        if (user.role !== "Admin") {
-          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin." });
+      const shouldUseRestFallback =
+        error?.message?.includes("ADMIN_TRANSACTION_TIMEOUT") ||
+        error?.message?.includes("permissions") ||
+        error?.message?.includes("PERMISSION_DENIED") ||
+        error?.message?.includes("UNAVAILABLE") ||
+        error?.message?.includes("deadline") ||
+        error?.code === 7 ||
+        error?.code === 14;
+
+      if (shouldUseRestFallback && token) {
+        console.log("adminDb transaction in payments/cancel failed/timeout; starting REST fallback...");
+        if (!["Admin", "Accountant"].includes(user.role)) {
+          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản được cấp quyền." });
         }
         try {
           const paymentData = await restGetDoc(token, "payments", paymentId);
@@ -1226,7 +1258,7 @@ async function startServer() {
           return res.json({ success: true });
         } catch (restErr: any) {
           console.error("Giao dịch hủy học phí REST thất bại:", restErr);
-          return res.status(500).json({ error: restErr.message || "Lỗi khi hủy biên lai học phí (REST)." });
+          return res.status(500).json({ error: restErr.message || "Không thể hủy biên lai học phí." });
         }
       } else {
         console.error("Giao dịch hủy học phí thất bại:", error);

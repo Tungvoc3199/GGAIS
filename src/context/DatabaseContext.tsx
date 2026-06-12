@@ -943,19 +943,37 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const user = auth.currentUser;
     if (!user) throw new Error("Chưa đăng nhập Firebase.");
     const token = await user.getIdToken();
-
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-        ...(options.headers || {})
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          ...(options.headers || {})
+        }
+      });
+      const text = await response.text();
+      let data: any = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = { error: text || "Máy chủ trả dữ liệu không hợp lệ." };
       }
-    });
-
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Lỗi máy chủ.");
-    return data;
+      if (!response.ok) {
+        throw new Error(data.error || `Lỗi máy chủ HTTP ${response.status}.`);
+      }
+      return data;
+    } catch (error: any) {
+      if (error?.name === "AbortError") {
+        throw new Error("Máy chủ phản hồi quá chậm. Yêu cầu đã dừng sau 12 giây.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
   };
 
   // --- PAYMENT ACTIONS (Ledger Hardening enforces payments CANNOT be deleted, only soft-cancelled) ---
@@ -1082,23 +1100,28 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const cancelPayment = async (id: string, reason: string) => {
-    if (currentUser?.role === 'Staff') {
-      safeAlert('Cố gắng từ chối: Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu.');
-      return;
+    if (currentUser?.role === "Staff") {
+      throw new Error("Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu.");
+    }
+    if (!reason.trim()) {
+      throw new Error("Bắt buộc nhập lý do hủy phiếu.");
     }
 
     if (isFirebase) {
+      setDataLoading(true);
       try {
-        setDataLoading(true);
-        await authFetch('/api/payments/cancel', {
-          method: 'POST',
-          body: JSON.stringify({ paymentId: id, reason })
+        const result = await authFetch("/api/payments/cancel", {
+          method: "POST",
+          body: JSON.stringify({
+            paymentId: id,
+            reason: reason.trim()
+          })
         });
+        if (!result?.success) {
+          throw new Error(result?.error || "Máy chủ chưa xác nhận hủy phiếu.");
+        }
         await loadFirestoreData();
-      } catch (err: any) {
-        console.error('Lỗi khi hủy học phí:', err);
-        safeAlert(`Lỗi hủy học phí: ${err.message || String(err)}`);
-        throw err;
+        return { success: true };
       } finally {
         setDataLoading(false);
       }
@@ -1113,13 +1136,12 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       setPayments(prev => prev.map(p => {
         if (p.id === id) {
-          return { ...p, isCancelled: true, cancellationReason: reason };
+          return { ...p, isCancelled: true, cancellationReason: reason.trim() };
         }
         return p;
       }));
 
       if (targetPay.status === 'Đã duyệt') {
-        // Reverse paid amounts
         setStudents(prev => prev.map(s => {
           if (s.id === targetPay.studentId) {
             const revPaid = Math.max(0, s.paidAmount - targetPay.amount);
@@ -1136,8 +1158,10 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       addAuditLog(
         'Hủy Biên Lai Doanh Thu (Payment Cancelled)', 
-        `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.status === 'Đã duyệt' ? targetPay.amount.toLocaleString('vi-VN') : 0} đ. Lý do: ${reason}.`
+        `Hủy thanh toán ID ${id} của HV ID ${targetPay.studentId}. Số tiền chênh hoàn: -${targetPay.status === 'Đã duyệt' ? targetPay.amount.toLocaleString('vi-VN') : 0} đ. Lý do: ${reason.trim()}.`
       );
+
+      return { success: true };
     }
   };
 

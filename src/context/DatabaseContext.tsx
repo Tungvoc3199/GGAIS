@@ -484,11 +484,11 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsSubmittingLogin(true);
     try {
       if (isFirebase) {
-        // Try setPersistence with browserSessionPersistence under a 3000ms timeout
+        // Try setPersistence with browserSessionPersistence under a 10000ms timeout
         try {
           await withTimeout(
             setPersistence(auth, browserSessionPersistence),
-            3000,
+            10000,
             'browserSessionPersistence timed out'
           );
         } catch (persError) {
@@ -500,13 +500,13 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           }
         }
 
-        // Attempt sign in with 10000ms timeout
+        // Attempt sign in with 35000ms timeout
         let userCredential;
         try {
           userCredential = await withTimeout(
             signInWithEmailAndPassword(auth, email.trim(), password),
-            10000,
-            'Đăng nhập Firebase Auth quá hạn (10 giây). Vui lòng thử lại.'
+            35000,
+            'Đăng nhập Firebase Auth quá hạn (35 giây). Vui lòng thử lại.'
           );
         } catch (authError: any) {
           if (
@@ -524,13 +524,13 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
         const fbUser = userCredential.user;
 
-        // Try getUserProfile with 10000ms timeout
+        // Try getUserProfile with 35000ms timeout
         let profile;
         try {
           profile = await withTimeout(
             getUserProfile(fbUser.uid),
-            10000,
-            'Tải cấu hình người dùng (Firestore profile) quá hạn (10 giây).'
+            35000,
+            'Tải cấu hình người dùng (Firestore profile) quá hạn (35 giây).'
           );
         } catch (profileError: any) {
           console.error('Error fetching getUserProfile:', profileError);

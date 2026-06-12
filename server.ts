@@ -85,7 +85,7 @@ async function lookupFirebaseAccountByIdToken(idToken: string) {
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
     const response = await fetch(
@@ -130,7 +130,7 @@ async function fetchUserDocViaRest(idToken: string, uid: string) {
   const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/users/${encodeURIComponent(uid)}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
 
   try {
     const response = await fetch(url, {
@@ -234,7 +234,7 @@ async function restGetDoc(token: string, collection: string, docId: string): Pro
   const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 35000);
 
   try {
     const response = await fetch(url, {
@@ -306,7 +306,7 @@ async function restCommit(token: string, writes: any[]): Promise<any> {
     `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}` +
     `/databases/${encodeURIComponent(databaseId)}/documents:commit`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 35000);
   try {
     const response = await fetch(url, {
       method: 'POST',
@@ -360,7 +360,7 @@ async function restSetDoc(token: string, collection: string, docId: string, data
   const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodeURIComponent(collection)}/${encodeURIComponent(docId)}?${queryParams}`;
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  const timeoutId = setTimeout(() => controller.abort(), 35000);
 
   const fields: any = {};
   for (const key of keys) {
@@ -425,7 +425,7 @@ async function restListDocs(token: string, collection: string): Promise<any[]> {
     do {
       const url = nextPageToken ? `${baseUrl}&pageToken=${encodeURIComponent(nextPageToken)}` : baseUrl;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 35000);
 
       try {
         const response = await fetch(url, {
@@ -1099,11 +1099,21 @@ async function startServer() {
     const adminDb = getAdminDb();
 
     const token = (req as any).userToken;
+    const startTime = Date.now();
     try {
+      console.log("[Payments Cancel] Starting adminDb transaction for paymentId:", paymentId);
       await withTimeout(
         adminDb.runTransaction(async (transaction) => {
+          const elapsed = () => Date.now() - startTime;
+          const remaining = () => Math.max(100, 4000 - elapsed());
+
           const paymentRef = adminDb.collection("payments").doc(paymentId);
-          const paymentDoc = await transaction.get(paymentRef);
+          console.log("[Payments Cancel] Doc get 1");
+          const paymentDoc = await withTimeout(
+            transaction.get(paymentRef),
+            remaining(),
+            "ADMIN_TRANSACTION_TIMEOUT"
+          );
           if (!paymentDoc.exists) {
             throw new Error("Không tìm thấy chứng từ cần hủy.");
           }
@@ -1114,7 +1124,12 @@ async function startServer() {
           }
 
           const studentRef = adminDb.collection("students").doc(paymentData.studentId);
-          const studentDoc = await transaction.get(studentRef);
+          console.log("[Payments Cancel] Doc get 2");
+          const studentDoc = await withTimeout(
+            transaction.get(studentRef),
+            remaining(),
+            "ADMIN_TRANSACTION_TIMEOUT"
+          );
           if (!studentDoc.exists) {
             throw new Error("Học viên sở hữu biên lai không tồn tại.");
           }
@@ -1159,8 +1174,10 @@ async function startServer() {
         "ADMIN_TRANSACTION_TIMEOUT"
       );
 
+      console.log("[Payments Cancel] adminDb transaction completed successfully");
       return res.json({ success: true });
     } catch (error: any) {
+      console.warn("[Payments Cancel] adminDb transaction failed/timed out:", error.message || error);
       const shouldUseRestFallback =
         error?.message?.includes("ADMIN_TRANSACTION_TIMEOUT") ||
         error?.message?.includes("permissions") ||
@@ -1171,24 +1188,28 @@ async function startServer() {
         error?.code === 14;
 
       if (shouldUseRestFallback && token) {
-        console.log("adminDb transaction in payments/cancel failed/timeout; starting REST fallback...");
+        console.log("[Payments Cancel] Starting REST fallback...");
         if (!["Admin", "Accountant"].includes(user.role)) {
           return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản được cấp quyền." });
         }
         try {
+          console.log("[Payments Cancel REST] Fetching payment:", paymentId);
           const paymentData = await restGetDoc(token, "payments", paymentId);
           if (!paymentData) {
             return res.status(404).json({ error: "Không tìm thấy chứng từ cần hủy." });
           }
+          console.log("[Payments Cancel REST] Payment fetched:", paymentData);
 
           if (paymentData.isCancelled) {
             return res.status(400).json({ error: "Biên lai học phí đã được hủy trước đó." });
           }
 
+          console.log("[Payments Cancel REST] Fetching student:", paymentData.studentId);
           const studentData = await restGetDoc(token, "students", paymentData.studentId);
           if (!studentData) {
             return res.status(404).json({ error: "Học viên sở hữu biên lai không tồn tại." });
           }
+          console.log("[Payments Cancel REST] Student fetched:", studentData);
 
           // Update payment cancellation
           const updatedPayment = {
@@ -1262,10 +1283,12 @@ async function startServer() {
             }
           });
 
+          console.log("[Payments Cancel REST] Committing writes to Firestore REST API...");
           await restCommit(token, writes);
+          console.log("[Payments Cancel REST] Writes committed successfully");
           return res.json({ success: true });
         } catch (restErr: any) {
-          console.error("Giao dịch hủy học phí REST thất bại:", restErr);
+          console.error("[Payments Cancel REST] REST fallback transaction failed:", restErr);
           return res.status(500).json({ error: restErr.message || "Không thể hủy biên lai học phí." });
         }
       } else {

@@ -57,6 +57,27 @@ function getAdminDb() {
   return dbId && dbId !== "(default)" ? getFirestore(app, dbId) : getFirestore(app);
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
+
+
 async function lookupFirebaseAccountByIdToken(idToken: string) {
   const apiKey = firebaseConfig.apiKey;
   if (!apiKey) {
@@ -1062,19 +1083,6 @@ async function startServer() {
       }
     }
   });
-
-async function withTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-  message: string
-): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error(message)), timeoutMs);
-    })
-  ]);
-}
 
   // 4. Cancels payments securely, reversing balances on student document in transaction
   app.post("/api/payments/cancel", checkAuth, async (req, res) => {

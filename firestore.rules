@@ -164,7 +164,7 @@ service cloud.firestore {
 
     // 1. Users Profile Collection (Locked: No self registration, Admin-only modification)
     match /users/{userId} {
-      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
       allow create: if false;
       allow update: if isAdmin() && isValidId(userId) && isValidUser(incoming());
       allow delete: if isAdmin();

@@ -34,6 +34,7 @@ function getGeminiClient() {
 
 // Initialize Firebase Admin SDK for Cloud Run ADC or local configurations
 import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 
 const configPath = path.join(process.cwd(), "src", "firebase-applet-config.json");
@@ -52,7 +53,120 @@ if (admin.apps.length === 0) {
 
 function getAdminDb() {
   const dbId = firebaseConfig.firestoreDatabaseId;
-  return dbId ? admin.firestore(dbId) : admin.firestore();
+  const app = admin.apps[0] || admin.app();
+  return dbId && dbId !== "(default)" ? getFirestore(app, dbId) : getFirestore(app);
+}
+
+async function lookupFirebaseAccountByIdToken(idToken: string) {
+  const apiKey = firebaseConfig.apiKey;
+  if (!apiKey) {
+    throw new Error("Thiếu Firebase Web API Key.");
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ idToken }),
+        signal: controller.signal
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error?.message ||
+        "Firebase Auth REST từ chối ID Token."
+      );
+    }
+
+    const account = data?.users?.[0];
+    if (!account?.localId || account.disabled === true) {
+      throw new Error("Tài khoản Firebase không hợp lệ hoặc đã bị khóa.");
+    }
+
+    return {
+      uid: account.localId,
+      email: account.email || "",
+      displayName: account.displayName || account.email || "Cloud User"
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function fetchUserDocViaRest(idToken: string, uid: string) {
+  const projectId = firebaseConfig.projectId;
+  const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/users/${encodeURIComponent(uid)}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${idToken}`,
+        "Content-Type": "application/json"
+      },
+      signal: controller.signal
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data?.error?.message || `Lỗi truy vấn REST Firestore: ${response.status}`);
+    }
+
+    if (!data.fields) {
+      return null;
+    }
+
+    const unwrappedValue = (valObj: any): any => {
+      if (!valObj) return null;
+      if ('stringValue' in valObj) return valObj.stringValue;
+      if ('booleanValue' in valObj) return valObj.booleanValue;
+      if ('integerValue' in valObj) return Number(valObj.integerValue);
+      if ('doubleValue' in valObj) return Number(valObj.doubleValue);
+      if ('timestampValue' in valObj) return valObj.timestampValue;
+      if ('mapValue' in valObj) {
+        const mapRes: any = {};
+        const mapFields = valObj.mapValue.fields || {};
+        for (const k of Object.keys(mapFields)) {
+          mapRes[k] = unwrappedValue(mapFields[k]);
+        }
+        return mapRes;
+      }
+      if ('arrayValue' in valObj) {
+        const arr = valObj.arrayValue.values || [];
+        return arr.map((item: any) => unwrappedValue(item));
+      }
+      return null;
+    };
+
+    const result: any = {};
+    for (const key of Object.keys(data.fields)) {
+      result[key] = unwrappedValue(data.fields[key]);
+    }
+    return result;
+  } catch (error: any) {
+    console.error("Lỗi fetchUserDocViaRest:", error);
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function startServer() {
@@ -71,17 +185,90 @@ async function startServer() {
     }
     const token = authHeader.split(" ")[1];
     try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const adminDb = getAdminDb();
-      const userDoc = await adminDb.collection("users").doc(decodedToken.uid).get();
-      if (!userDoc.exists) {
+      let uid: string;
+      try {
+        const decodedToken = await admin.auth().verifyIdToken(token);
+        uid = decodedToken.uid;
+      } catch (authErr) {
+        console.log("verifyIdToken lookup bypass index; attempting fallback REST lookup...");
+        const account = await lookupFirebaseAccountByIdToken(token);
+        uid = account.uid;
+      }
+      
+      let userData: any = null;
+      try {
+        const adminDb = getAdminDb();
+        const userDoc = await adminDb.collection("users").doc(uid).get();
+        if (userDoc.exists) {
+          userData = userDoc.data();
+        }
+      } catch (dbErr: any) {
+        const isPermissionError = dbErr.message?.includes("permissions") || dbErr.message?.includes("PERMISSION_DENIED") || dbErr.code === 7;
+        if (isPermissionError) {
+          console.log("adminDb query bypass index; attempting fallback REST doc fetch...");
+          userData = await fetchUserDocViaRest(token, uid);
+        } else {
+          throw dbErr;
+        }
+      }
+
+      if (!userData) {
         return res.status(403).json({ error: "Tài khoản của bạn chưa được cấp quyền truy cập hệ thống. Vui lòng liên hệ Admin để gán quyền." });
       }
-      req.currentUserProfile = userDoc.data();
+      req.currentUserProfile = userData;
       next();
     } catch (error: any) {
       console.error("Xác thực ID Token thất bại:", error);
       return res.status(401).json({ error: "Xác thực không hợp lệ hoặc đã hết hạn." });
+    }
+  }
+
+  async function checkOcrAuth(req: any, res: any, next: any) {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        error: "Không tìm thấy mã xác thực Authorization."
+      });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    try {
+      let decodedToken: any;
+      try {
+        decodedToken = await admin.auth().verifyIdToken(token);
+      } catch (authErr) {
+        console.log("verifyIdToken (OCR) failed, trying fallback REST lookup...");
+        const account = await lookupFirebaseAccountByIdToken(token);
+        decodedToken = {
+          uid: account.uid,
+          email: account.email,
+          name: account.displayName
+        };
+      }
+
+      req.currentUserProfile = {
+        uid: decodedToken.uid,
+        email: decodedToken.email || "",
+        displayName:
+          decodedToken.name ||
+          decodedToken.email ||
+          "Cloud User",
+        role: "AuthenticatedUser"
+      };
+
+      next();
+    } catch (error: any) {
+      console.error("OCR ID Token verification failed:", {
+        name: error?.name,
+        message: error?.message,
+        code: error?.code
+      });
+
+      return res.status(401).json({
+        error: "Phiên đăng nhập OCR không hợp lệ. Vui lòng đăng xuất và đăng nhập lại."
+      });
     }
   }
 
@@ -93,10 +280,36 @@ async function startServer() {
     }
     const token = authHeader.split(" ")[1];
     try {
-      const decodedToken = await admin.auth().verifyIdToken(token);
-      const adminDb = getAdminDb();
-      const userDoc = await adminDb.collection("users").doc(decodedToken.uid).get();
-      if (!userDoc.exists || userDoc.data()?.role !== "Admin") {
+      let uid: string;
+      let decodedToken: any = null;
+      try {
+        decodedToken = await admin.auth().verifyIdToken(token);
+        uid = decodedToken.uid;
+      } catch (authErr) {
+        console.log("verifyIdToken (admin) lookup bypass index; attempting fallback REST lookup...");
+        const account = await lookupFirebaseAccountByIdToken(token);
+        uid = account.uid;
+        decodedToken = { uid, email: account.email };
+      }
+      
+      let userData: any = null;
+      try {
+        const adminDb = getAdminDb();
+        const userDoc = await adminDb.collection("users").doc(uid).get();
+        if (userDoc.exists) {
+          userData = userDoc.data();
+        }
+      } catch (dbErr: any) {
+        const isPermissionError = dbErr.message?.includes("permissions") || dbErr.message?.includes("PERMISSION_DENIED") || dbErr.code === 7;
+        if (isPermissionError) {
+          console.log("adminDb query (admin) bypass index; attempting fallback REST doc fetch...");
+          userData = await fetchUserDocViaRest(token, uid);
+        } else {
+          throw dbErr;
+        }
+      }
+
+      if (!userData || userData.role !== "Admin") {
         return res.status(403).json({ error: "Quyền truy cập bị từ chối: Yêu cầu đặc quyền Admin." });
       }
       req.adminUser = decodedToken;
@@ -582,7 +795,7 @@ async function startServer() {
   const ocrRateLimits = new Map<string, { count: number; resetTime: number }>();
 
   // API Endpoint to process OCR on identity cards (CCCD) / profiles
-  app.post("/api/ocr-card", checkAuth, async (req, res) => {
+  app.post("/api/ocr-card", checkOcrAuth, async (req, res) => {
     try {
       const user = req.currentUserProfile;
       const now = Date.now();

@@ -9,6 +9,8 @@ import { Student, StudentStatus, Lesson, Payment } from '../types';
 import { exportStudentsToExcel, printStudentsPDF, printStudentContractPDF } from '../utils/exportUtils';
 import { getLocalTodayString, getLocalOffsetString } from '../utils/dateUtils';
 import { uploadStudentDocument } from '../services/storageService';
+import { ref, deleteObject } from 'firebase/storage';
+import { storage } from '../services/firebase';
 import {
   Search,
   Filter,
@@ -306,6 +308,20 @@ export const Students: React.FC<StudentsProps> = ({
     }
   };
 
+  const handleViewSecureDocument = async (studentId: string, kind: 'cccd' | 'eid') => {
+    try {
+      const res = await authFetch(`/api/students/${studentId}/document-url?kind=${kind}`);
+      if (res && res.url) {
+        setPreviewImageUrl(res.url);
+      } else {
+        alert("Không thể tải đường dẫn định danh bảo mật.");
+      }
+    } catch (err: any) {
+      console.error("Lỗi xem tài liệu:", err);
+      alert(err.message || "Tài liệu chưa tồn tại hoặc bị từ chối truy cập.");
+    }
+  };
+
   // Local Quick payment trigger from study detail
   const [quickPayAmount, setQuickPayAmount] = useState(0);
   const [quickPayMethod, setQuickPayMethod] = useState<'Tiền mặt' | 'Chuyển khoản' | 'Khác'>('Chuyển khoản');
@@ -518,20 +534,27 @@ export const Students: React.FC<StudentsProps> = ({
     setIsCreatingStudent(true);
     try {
       const studentId = `stud_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      let finalCccdImage = isFirebase ? '' : cccdImage;
-      let finalEidImage = isFirebase ? '' : eidImage;
       let finalAvatarImage = isFirebase ? '' : avatarImage;
+      let finalCccdPath = '';
+      let finalEidPath = '';
+      const uploadedPaths: string[] = [];
 
       if (isFirebase) {
         try {
           if (cccdFile) {
-            finalCccdImage = await uploadStudentDocument(studentId, 'cccd', cccdFile);
+            const res = await uploadStudentDocument(studentId, 'cccd', cccdFile);
+            finalCccdPath = res.storagePath;
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
           }
           if (eidFile) {
-            finalEidImage = await uploadStudentDocument(studentId, 'eid', eidFile);
+            const res = await uploadStudentDocument(studentId, 'eid', eidFile);
+            finalEidPath = res.storagePath;
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
           }
           if (avatarFile) {
-            finalAvatarImage = await uploadStudentDocument(studentId, 'avatar', avatarFile);
+            const res = await uploadStudentDocument(studentId, 'avatar', avatarFile);
+            finalAvatarImage = res.downloadUrl || '';
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
           }
         } catch (uploadErr: any) {
           console.error('Lỗi tải file lên Firebase Storage:', uploadErr);
@@ -541,30 +564,49 @@ export const Students: React.FC<StudentsProps> = ({
         }
       }
 
-      await addStudent({
-        id: studentId,
-        name: newName.trim(),
-        phone: newPhone.trim(),
-        dob: newDob,
-        address: newAddress.trim(),
-        licenseClass: newLicenseClass,
-        courseType: newCourseType,
-        totalFee: newTotalFee,
-        registrationDate: getLocalTodayString(),
-        nextPaymentDeadline: getLocalOffsetString(15),
-        status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
-        totalSessions: newTotalSessions,
-        assignedInstructorId: newInstructorId,
-        assignedVehicleId: newVehicleId,
-        notes: newNotes,
-        reminderStatus: 'Chưa nhắc',
-        tags: newTags,
-        cccdImage: finalCccdImage,
-        avatarImage: finalAvatarImage,
-        eidImage: finalEidImage,
-        theoryCompleted: false,
-        simulationCompleted: false
-      });
+      try {
+        await addStudent({
+          id: studentId,
+          name: newName.trim(),
+          phone: newPhone.trim(),
+          dob: newDob,
+          address: newAddress.trim(),
+          licenseClass: newLicenseClass,
+          courseType: newCourseType,
+          totalFee: newTotalFee,
+          registrationDate: getLocalTodayString(),
+          nextPaymentDeadline: getLocalOffsetString(15),
+          status: isWaitlist ? 'Danh sách chờ' : 'Mới đăng ký',
+          totalSessions: newTotalSessions,
+          assignedInstructorId: newInstructorId,
+          assignedVehicleId: newVehicleId,
+          notes: newNotes,
+          reminderStatus: 'Chưa nhắc',
+          tags: newTags,
+          cccdImage: isFirebase ? '' : cccdImage,
+          avatarImage: finalAvatarImage,
+          eidImage: isFirebase ? '' : eidImage,
+          cccdStoragePath: finalCccdPath,
+          eidStoragePath: finalEidPath,
+          theoryCompleted: false,
+          simulationCompleted: false
+        });
+      } catch (addErr: any) {
+        console.error('Lỗi thêm học viên, tiến hành dọn dẹp file mồ côi:', addErr);
+        if (isFirebase && uploadedPaths.length > 0) {
+          for (const path of uploadedPaths) {
+            try {
+              await deleteObject(ref(storage, path));
+              console.log(`Đã dọn dẹp thành công file rác: ${path}`);
+            } catch (delErr) {
+              console.warn(`Lỗi khi dọn dẹp file rác ${path}:`, delErr);
+            }
+          }
+        }
+        alert(`Đăng ký học viên thất bại: ${addErr.message || String(addErr)}`);
+        setIsCreatingStudent(false);
+        return;
+      }
 
       alert('Đăng ký tuyển sinh học viên thành công!');
 
@@ -1270,19 +1312,33 @@ export const Students: React.FC<StudentsProps> = ({
                       {/* CCCD Group of selected Student */}
                       <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl flex flex-col justify-between items-center relative min-h-24">
                         <span className="text-[9px] text-slate-500 uppercase tracking-wider block mb-1">Căn cước công dân</span>
-                        {selectedStudent.cccdImage ? (
+                        {selectedStudent.cccdImage || selectedStudent.cccdStoragePath ? (
                           <div className="w-full flex-1 flex flex-col items-center justify-center">
-                            <img
-                              src={selectedStudent.cccdImage}
-                              alt="Ảnh CCCD"
-                              className="w-full h-12 object-cover rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs"
-                              onClick={() => setPreviewImageUrl(selectedStudent.cccdImage!)}
-                            />
+                            <div
+                              onClick={() => {
+                                if (isFirebase && selectedStudent.cccdStoragePath) {
+                                  handleViewSecureDocument(selectedStudent.id, 'cccd');
+                                } else if (selectedStudent.cccdImage) {
+                                  setPreviewImageUrl(selectedStudent.cccdImage);
+                                }
+                              }}
+                              className="w-full h-12 flex items-center justify-center rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs bg-slate-100 overflow-hidden text-[10px] text-slate-600 font-bold"
+                            >
+                              {isFirebase && selectedStudent.cccdStoragePath ? (
+                                <span>📄 Xem CCCD</span>
+                              ) : (
+                                <img
+                                  src={selectedStudent.cccdImage}
+                                  alt="Ảnh CCCD"
+                                  className="w-full h-full object-cover"
+                                />
+                              )}
+                            </div>
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 if (confirm("Gỡ tài liệu ảnh chụp này khỏi hồ sơ học viên?")) {
-                                  updateStudent(selectedStudent.id, { cccdImage: "" });
+                                  await updateStudent(selectedStudent.id, { cccdImage: "", cccdStoragePath: "" });
                                 }
                               }}
                               className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
@@ -1297,15 +1353,25 @@ export const Students: React.FC<StudentsProps> = ({
                             <input
                               type="file"
                               accept="image/*"
-                              onChange={(e) => {
+                              onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const reader = new FileReader();
-                                  reader.onload = () => {
-                                    updateStudent(selectedStudent.id, { cccdImage: reader.result as string });
-                                    alert("Đã cập nhật ảnh CCCD thành công!");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  if (isFirebase) {
+                                    try {
+                                      const res = await uploadStudentDocument(selectedStudent.id, 'cccd', file);
+                                      await updateStudent(selectedStudent.id, { cccdStoragePath: res.storagePath });
+                                      alert("Đã cập nhật ảnh CCCD thành công!");
+                                    } catch (err: any) {
+                                      alert("Lỗi tải lên CCCD: " + err.message);
+                                    }
+                                  } else {
+                                    const reader = new FileReader();
+                                    reader.onload = async () => {
+                                      await updateStudent(selectedStudent.id, { cccdImage: reader.result as string });
+                                      alert("Đã cập nhật ảnh CCCD thành công!");
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
                                 }
                               }}
                               className="hidden"
@@ -1327,9 +1393,9 @@ export const Students: React.FC<StudentsProps> = ({
                             />
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 if (confirm("Gỡ ảnh chân dung thẻ này khỏi hồ sơ học viên?")) {
-                                  updateStudent(selectedStudent.id, { avatarImage: "" });
+                                  await updateStudent(selectedStudent.id, { avatarImage: "" });
                                 }
                               }}
                               className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
@@ -1344,15 +1410,25 @@ export const Students: React.FC<StudentsProps> = ({
                             <input
                               type="file"
                               accept="image/*"
-                              onChange={(e) => {
+                              onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const reader = new FileReader();
-                                  reader.onload = () => {
-                                    updateStudent(selectedStudent.id, { avatarImage: reader.result as string });
-                                    alert("Đã cập nhật ảnh thẻ thành công!");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  if (isFirebase) {
+                                    try {
+                                      const res = await uploadStudentDocument(selectedStudent.id, 'avatar', file);
+                                      await updateStudent(selectedStudent.id, { avatarImage: res.downloadUrl });
+                                      alert("Đã cập nhật ảnh thẻ thành công!");
+                                    } catch (err: any) {
+                                      alert("Lỗi tải lên ảnh chân dung: " + err.message);
+                                    }
+                                  } else {
+                                    const reader = new FileReader();
+                                    reader.onload = async () => {
+                                      await updateStudent(selectedStudent.id, { avatarImage: reader.result as string });
+                                      alert("Đã cập nhật ảnh thẻ thành công!");
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
                                 }
                               }}
                               className="hidden"
@@ -1364,19 +1440,33 @@ export const Students: React.FC<StudentsProps> = ({
                       {/* VNeID Group of selected Student */}
                       <div className="border border-slate-100 bg-slate-50/50 p-2 rounded-xl flex flex-col justify-between items-center relative min-h-24">
                         <span className="text-[9px] text-slate-500 uppercase tracking-wider block mb-1">Thẻ VNeID ĐT</span>
-                        {selectedStudent.eidImage ? (
+                        {selectedStudent.eidImage || selectedStudent.eidStoragePath ? (
                           <div className="w-full flex-1 flex flex-col items-center justify-center">
-                            <img
-                              src={selectedStudent.eidImage}
-                              alt="VNeID"
-                              className="w-full h-12 object-cover rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs"
-                              onClick={() => setPreviewImageUrl(selectedStudent.eidImage!)}
-                            />
+                            <div
+                              onClick={() => {
+                                if (isFirebase && selectedStudent.eidStoragePath) {
+                                  handleViewSecureDocument(selectedStudent.id, 'eid');
+                                } else if (selectedStudent.eidImage) {
+                                  setPreviewImageUrl(selectedStudent.eidImage);
+                                }
+                              }}
+                              className="w-full h-12 flex items-center justify-center rounded-lg border border-slate-200 cursor-zoom-in hover:opacity-90 active:scale-95 transition-all shadow-3xs bg-slate-100 overflow-hidden text-[10px] text-slate-600 font-bold"
+                            >
+                              {isFirebase && selectedStudent.eidStoragePath ? (
+                                <span>📄 Xem VNeID</span>
+                              ) : (
+                                <img
+                                  src={selectedStudent.eidImage}
+                                  alt="VNeID"
+                                  className="w-full h-full object-cover"
+                                />
+                              )}
+                            </div>
                             <button
                               type="button"
-                              onClick={() => {
+                              onClick={async () => {
                                 if (confirm("Gỡ tài liệu ảnh chụp này khỏi hồ sơ học viên?")) {
-                                  updateStudent(selectedStudent.id, { eidImage: "" });
+                                  await updateStudent(selectedStudent.id, { eidImage: "", eidStoragePath: "" });
                                 }
                               }}
                               className="text-[9px] text-red-500 hover:text-red-700 font-bold mt-1.5 cursor-pointer block uppercase tracking-tight"
@@ -1391,15 +1481,25 @@ export const Students: React.FC<StudentsProps> = ({
                             <input
                               type="file"
                               accept="image/*"
-                              onChange={(e) => {
+                              onChange={async (e) => {
                                 const file = e.target.files?.[0];
                                 if (file) {
-                                  const reader = new FileReader();
-                                  reader.onload = () => {
-                                    updateStudent(selectedStudent.id, { eidImage: reader.result as string });
-                                    alert("Đã cập nhật ảnh VNeID thành công!");
-                                  };
-                                  reader.readAsDataURL(file);
+                                  if (isFirebase) {
+                                    try {
+                                      const res = await uploadStudentDocument(selectedStudent.id, 'eid', file);
+                                      await updateStudent(selectedStudent.id, { eidStoragePath: res.storagePath });
+                                      alert("Đã cập nhật ảnh VNeID thành công!");
+                                    } catch (err: any) {
+                                      alert("Lỗi tải lên VNeID: " + err.message);
+                                    }
+                                  } else {
+                                    const reader = new FileReader();
+                                    reader.onload = async () => {
+                                      await updateStudent(selectedStudent.id, { eidImage: reader.result as string });
+                                      alert("Đã cập nhật ảnh VNeID thành công!");
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
                                 }
                               }}
                               className="hidden"

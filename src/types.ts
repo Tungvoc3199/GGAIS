@@ -42,6 +42,8 @@ export interface Student {
   cccdImage?: string;
   avatarImage?: string;
   eidImage?: string;
+  cccdStoragePath?: string;
+  eidStoragePath?: string;
   isArchived?: boolean;
   archivedAt?: string;
   archivedBy?: string;

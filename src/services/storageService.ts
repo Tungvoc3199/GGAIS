@@ -14,12 +14,17 @@ function sanitizeFileName(name: string): string {
     .slice(-120);
 }
 
+export interface UploadResult {
+  storagePath: string;
+  downloadUrl?: string;
+}
+
 export async function uploadStudentDocument(
   studentId: string,
   kind: StudentDocumentKind,
   file: File | null
-): Promise<string> {
-  if (!file) return '';
+): Promise<UploadResult> {
+  if (!file) return { storagePath: '' };
   if (!auth.currentUser) {
     throw new Error('Bạn cần đăng nhập Cloud trước khi tải ảnh lên.');
   }
@@ -51,5 +56,9 @@ export async function uploadStudentDocument(
   await uploadBytes(fileRef, file, {
     contentType: contentType
   });
-  return getDownloadURL(fileRef);
+  if (kind === 'avatar') {
+    const downloadUrl = await getDownloadURL(fileRef);
+    return { storagePath: fileRef.fullPath, downloadUrl };
+  }
+  return { storagePath: fileRef.fullPath };
 }

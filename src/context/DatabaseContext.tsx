@@ -4,6 +4,10 @@
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
+
+export const CLIENT_API_TIMEOUT_MS = 45000;
+export const OCR_API_TIMEOUT_MS = 60000;
+export const AUTH_RESTORE_TIMEOUT_MS = 30000;
 import {
   Student,
   Instructor,
@@ -85,17 +89,17 @@ interface DatabaseContextType {
   deleteStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   archiveStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   // Lesson Actions
-  addLesson: (lesson: Omit<Lesson, 'id'>) => { success: boolean; error?: string };
-  updateLesson: (id: string, updated: Partial<Lesson>) => { success: boolean; error?: string };
-  cancelLesson: (id: string, reason: string) => void;
-  deleteLesson: (id: string) => void;
+  addLesson: (lesson: Omit<Lesson, 'id'>) => Promise<{ success: boolean; error?: string }>;
+  updateLesson: (id: string, updated: Partial<Lesson>) => Promise<{ success: boolean; error?: string }>;
+  cancelLesson: (id: string, reason: string) => Promise<void>;
+  deleteLesson: (id: string) => Promise<{ success: boolean; error?: string }>;
   // Payment Actions
   addPayment: (payment: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => Promise<{ success: boolean; error?: string }>;
   cancelPayment: (id: string, reason: string) => Promise<void>;
   approvePayment: (id: string) => Promise<void>;
   reconcileStudentPayments: (studentId: string) => Promise<{ success: boolean; paidAmount?: number; remainingAmount?: number; error?: string }>;
   batchConfirmLessons: (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => Promise<{ success: boolean; committedCount?: number; hasConflicts?: boolean; conflicts?: any[]; message?: string }>;
-  authFetch: (url: string, options?: RequestInit) => Promise<any>;
+  authFetch: (url: string, options?: RequestInit, timeoutMs?: number) => Promise<any>;
   // Instructor Actions
   addInstructor: (instructor: Omit<Instructor, 'id'>) => void;
   updateInstructor: (id: string, updated: Partial<Instructor>) => void;
@@ -680,37 +684,14 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (isFirebase) {
       try {
-        const counterRef = doc(db, 'settings', 'studentCounter');
-        
-        await runTransaction(db, async (transaction) => {
-          const counterDoc = await transaction.get(counterRef);
-          let nextNum = 1;
-          if (counterDoc.exists()) {
-            nextNum = (counterDoc.data().nextCodeNo || 1);
-          }
-          code = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
-          
-          // Increment transaction counter
-          transaction.set(counterRef, { nextCodeNo: nextNum + 1 }, { merge: true });
-
-          const freshStudent: Student = {
-            ...restOfS,
-            id,
-            code,
-            paidAmount: 0,
-            remainingAmount: newS.totalFee,
-            completedSessions: 0,
-            remainingSessions: newS.totalSessions
-          };
-
-          const studentDocRef = doc(db, 'students', id);
-          transaction.set(studentDocRef, freshStudent);
+        const payload = { id, ...newS };
+        await authFetch('/api/students/create', {
+          method: 'POST',
+          body: JSON.stringify(payload)
         });
-
-        // Refetch newest states from Firestore
         await loadFirestoreData();
       } catch (err: any) {
-        console.error('Lỗi khi đăng ký học viên (Firestore Transaction):', err);
+        console.error('Lỗi khi đăng ký học viên (Backend API):', err);
         throw err;
       }
     } else {
@@ -751,10 +732,35 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     if (isFirebase) {
       try {
-        await saveStudentDoc(mergedStudent);
+        const docFields: any = { studentId: id };
+        let hasDocs = false;
+        if (updated.avatarImage !== undefined) { docFields.avatarImage = updated.avatarImage; hasDocs = true; }
+        if (updated.cccdStoragePath !== undefined) { docFields.cccdStoragePath = updated.cccdStoragePath; hasDocs = true; }
+        if (updated.eidStoragePath !== undefined) { docFields.eidStoragePath = updated.eidStoragePath; hasDocs = true; }
+        if (hasDocs) {
+          await authFetch('/api/students/update-documents', {
+            method: 'POST',
+            body: JSON.stringify(docFields)
+          });
+        }
+
+        const textFields: any = { studentId: id, ...updated };
+        delete textFields.avatarImage;
+        delete textFields.cccdStoragePath;
+        delete textFields.eidStoragePath;
+        delete textFields.cccdImage;
+        delete textFields.eidImage;
+
+        if (Object.keys(textFields).length > 1) {
+          await authFetch('/api/students/update', {
+            method: 'POST',
+            body: JSON.stringify(textFields)
+          });
+        }
+        await loadFirestoreData();
       } catch (err: any) {
-        console.error('Lỗi updateStudent Firestore:', err);
-        return { success: false, error: 'Lỗi lưu dữ liệu lên Cloud Firestore: ' + (err.message || String(err)) };
+        console.error('Lỗi updateStudent API:', err);
+        return { success: false, error: 'Lỗi lưu dữ liệu lên Cloud Backend: ' + (err.message || String(err)) };
       }
     }
 
@@ -779,34 +785,52 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return { success: false, error: 'Không tìm thấy học viên trong hệ thống.' };
     }
 
-    const hasLessons = lessons.some(l => l.studentId === id);
-    const hasPayments = payments.some(p => p.studentId === id);
-
-    if (hasLessons || hasPayments) {
-      return {
-        success: false,
-        error: 'Không thể xóa vì học viên đã có lịch học hoặc biên lai. Hãy dùng chức năng Lưu trữ.'
-      };
-    }
-
     if (isFirebase) {
       try {
-        await deleteStudentDoc(id);
+        await authFetch('/api/students/delete', {
+          method: 'POST',
+          body: JSON.stringify({ studentId: id })
+        });
+        await loadFirestoreData();
       } catch (err: any) {
-        console.error('Lỗi xóa học viên trong Firestore:', err);
-        return { success: false, error: 'Lỗi xóa trên Cloud Firestore: ' + (err.message || String(err)) };
+        console.error('Lỗi xóa học viên trong API backend:', err);
+        return { success: false, error: 'Lỗi xóa trên Cloud Backend: ' + (err.message || String(err)) };
       }
+    } else {
+      const hasLessons = lessons.some(l => l.studentId === id);
+      const hasPayments = payments.some(p => p.studentId === id);
+
+      if (hasLessons || hasPayments) {
+        return {
+          success: false,
+          error: 'Không thể xóa vì học viên đã có lịch học hoặc biên lai. Hãy dùng chức năng Lưu trữ.'
+        };
+      }
+
+      setStudents(prev => prev.filter(s => s.id !== id));
+      await addAuditLog('Xóa học viên', `Đã xóa học viên ${sObj.name} ra khỏi hồ sơ lưu trữ chính.`);
     }
 
-    setStudents(prev => prev.filter(s => s.id !== id));
-
-    await addAuditLog('Xóa học viên', `Đã xóa học viên ${sObj.name} ra khỏi hồ sơ lưu trữ chính.`);
     return { success: true };
   };
 
   const archiveStudent = async (id: string): Promise<{ success: boolean; error?: string }> => {
     if (currentUser?.role !== 'Admin') {
       return { success: false, error: 'Chỉ quản trị tối cao mới có đặc quyền lưu trữ học viên.' };
+    }
+
+    if (isFirebase) {
+      try {
+        await authFetch('/api/students/archive', {
+          method: 'POST',
+          body: JSON.stringify({ studentId: id })
+        });
+        await loadFirestoreData();
+        return { success: true };
+      } catch (err: any) {
+        console.error('Lỗi lưu trữ học viên:', err);
+        return { success: false, error: 'Lỗi lưu trữ trên Cloud Backend: ' + (err.message || String(err)) };
+      }
     }
 
     return await updateStudent(id, {
@@ -818,83 +842,96 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   // --- LESSON ACTIONS ---
-  const addLesson = (newL: Omit<Lesson, 'id'>) => {
-    const id = generateUniqueId('less');
-    const freshLesson: Lesson = {
-      ...newL,
-      id
-    };
-
-    setLessons(prev => [freshLesson, ...prev]);
-
+  const addLesson = async (newL: Omit<Lesson, 'id'>): Promise<{ success: boolean; error?: string }> => {
     if (isFirebase) {
-      saveLessonDoc(freshLesson).catch(err => console.error('Lỗi tạo mới Lesson:', err));
-    }
-
-    const sObj = students.find(s => s.id === newL.studentId);
-    
-    // Check if the lesson overrides normal business hours
-    const [startH, startM] = newL.startTime.split(':').map(Number);
-    const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
-    const [workH, workM] = schoolHours.start.split(':').map(Number);
-    const [endH, endM] = schoolHours.end.split(':').map(Number);
-    
-    const startVal = startH * 60 + startM;
-    const workVal = workH * 60 + workM;
-    const endVal = endH * 60 + endM;
-    
-    const isOverride = startVal < workVal || startVal > endVal;
-    
-    if (isOverride) {
-      addAuditLog(
-        'Ghi đè ca dạy (Schedule Override)', 
-        `Cảnh báo: Đã xếp lịch biểu ngoài giờ hành chính (Lúc ${newL.startTime} ngày ${newL.date}) cho học viên ${sObj?.name || newL.studentId} của giảng viên ID ${newL.instructorId}.`
-      );
+      try {
+        await authFetch('/api/lessons/create', {
+          method: 'POST',
+          body: JSON.stringify(newL)
+        });
+        await loadFirestoreData();
+        return { success: true };
+      } catch (err: any) {
+        console.error('Lỗi tạo mới Lesson (API backend):', err);
+        return { success: false, error: err.message || 'Lỗi xếp lịch học.' };
+      }
     } else {
-      addAuditLog('Xếp lịch học', `Xếp lịch học thực tế ngày ${newL.date} từ ${newL.startTime} cho ${sObj?.name || newL.studentId}.`);
-    }
+      const id = generateUniqueId('less');
+      const freshLesson: Lesson = {
+        ...newL,
+        id
+      };
 
-    return { success: true };
+      setLessons(prev => [freshLesson, ...prev]);
+
+      const sObj = students.find(s => s.id === newL.studentId);
+      
+      // Check if the lesson overrides normal business hours
+      const [startH, startM] = newL.startTime.split(':').map(Number);
+      const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
+      const [workH, workM] = schoolHours.start.split(':').map(Number);
+      const [endH, endM] = schoolHours.end.split(':').map(Number);
+      
+      const startVal = startH * 60 + startM;
+      const workVal = workH * 60 + workM;
+      const endVal = endH * 60 + endM;
+      
+      const isOverride = startVal < workVal || startVal > endVal;
+      
+      if (isOverride) {
+        await addAuditLog(
+          'Ghi đè ca dạy (Schedule Override)', 
+          `Cảnh báo: Đã xếp lịch biểu ngoài giờ hành chính (Lúc ${newL.startTime} ngày ${newL.date}) cho học viên ${sObj?.name || newL.studentId} của giảng viên ID ${newL.instructorId}.`
+        );
+      } else {
+        await addAuditLog('Xếp lịch học', `Xếp lịch học thực tế ngày ${newL.date} từ ${newL.startTime} cho ${sObj?.name || newL.studentId}.`);
+      }
+
+      return { success: true };
+    }
   };
 
-  const updateLesson = (id: string, updated: Partial<Lesson>) => {
-    let oldLess: Lesson | undefined;
-
-    setLessons(prev => prev.map(les => {
-      if (les.id === id) {
-        oldLess = les;
-        return { ...les, ...updated };
+  const updateLesson = async (id: string, updated: Partial<Lesson>): Promise<{ success: boolean; error?: string }> => {
+    if (isFirebase) {
+      try {
+        await authFetch('/api/lessons/update', {
+          method: 'POST',
+          body: JSON.stringify({ id, ...updated })
+        });
+        await loadFirestoreData();
+        return { success: true };
+      } catch (err: any) {
+        console.error('Lỗi cập nhật Lesson (API backend):', err);
+        return { success: false, error: err.message || 'Lỗi cập nhật lịch học.' };
       }
-      return les;
-    }));
+    } else {
+      let oldLess: Lesson | undefined;
 
-    setTimeout(async () => {
-      const fullDoc = lessons.find(l => l.id === id);
-      if (fullDoc && isFirebase) {
-        try {
-          await saveLessonDoc({ ...fullDoc, ...updated });
-        } catch (err) {
-          console.error('Lỗi khi cập nhật Lesson Firestore:', err);
+      setLessons(prev => prev.map(les => {
+        if (les.id === id) {
+          oldLess = les;
+          return { ...les, ...updated };
+        }
+        return les;
+      }));
+
+      // If marked as completed, update student sessions count
+      if (updated.status === 'Đã hoàn thành' && oldLess?.status !== 'Đã hoàn thành') {
+        const studentId = oldLess?.studentId || updated.studentId;
+        if (studentId) {
+          updateStudentSessionsCompleted(studentId);
         }
       }
-    }, 100);
 
-    // If marked as completed, update student sessions count
-    if (updated.status === 'Đã hoàn thành' && oldLess?.status !== 'Đã hoàn thành') {
-      const studentId = oldLess?.studentId || updated.studentId;
-      if (studentId) {
-        updateStudentSessionsCompleted(studentId);
+      // Checking for schedule reschedule logs
+      if (updated.date || updated.startTime) {
+        await addAuditLog('Ghi đè lịch học', `Thay đổi lịch hẹn ID: ${id} sang thời gian mới: ${updated.date || oldLess?.date} lúc ${updated.startTime || oldLess?.startTime}.`);
+      } else {
+        await addAuditLog('Cập nhật trạng thái dạy', `Sửa trạng thái ca dạy ID ${id} thành ${updated.status || 'Có mặt'}.`);
       }
-    }
 
-    // Checking for schedule reschedule logs
-    if (updated.date || updated.startTime) {
-      addAuditLog('Ghi đè lịch học', `Thay đổi lịch hẹn ID: ${id} sang thời gian mới: ${updated.date || oldLess?.date} lúc ${updated.startTime || oldLess?.startTime}.`);
-    } else {
-      addAuditLog('Cập nhật trạng thái dạy', `Sửa trạng thái ca dạy ID ${id} thành ${updated.status || 'Có mặt'}.`);
+      return { success: true };
     }
-
-    return { success: true };
   };
 
   const updateStudentSessionsCompleted = (studentId: string) => {
@@ -906,45 +943,50 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           completedSessions: completed,
           remainingSessions: s.totalSessions - completed
         };
-        if (isFirebase) {
-          saveStudentDoc(updatedStudent).catch(err => console.error(err));
-        }
         return updatedStudent;
       }
       return s;
     }));
   };
 
-  const cancelLesson = (id: string, reason: string) => {
-    updateLesson(id, { status: 'Hủy lịch', resultNote: `Hủy lịch: ${reason}` });
-    addAuditLog('Hủy lịch ca tập', `Hủy ca học có ID ${id} với nguyên do: ${reason}`);
+  const cancelLesson = async (id: string, reason: string): Promise<void> => {
+    await updateLesson(id, { status: 'Hủy lịch', resultNote: `Hủy lịch: ${reason}` });
+    if (!isFirebase) {
+      await addAuditLog('Hủy lịch ca tập', `Hủy ca học có ID ${id} với nguyên do: ${reason}`);
+    }
   };
 
-  const deleteLesson = async (id: string) => {
+  const deleteLesson = async (id: string): Promise<{ success: boolean; error?: string }> => {
     if (currentUser?.role === 'Instructor') {
       safeAlert('Giảng viên không có thẩm quyền loại bỏ hoặc xóa vĩnh viễn sự kiện ca dạy khỏi sổ cái.');
-      return;
+      return { success: false, error: 'Giảng viên không có thẩm quyền xóa ca dạy.' };
     }
-
-    setLessons(prev => prev.filter(l => l.id !== id));
 
     if (isFirebase) {
       try {
-        await deleteLessonDoc(id);
-      } catch (err) {
-        console.error('Lỗi Firestore deleteLesson:', err);
+        await authFetch('/api/lessons/delete', {
+          method: 'POST',
+          body: JSON.stringify({ lessonId: id })
+        });
+        await loadFirestoreData();
+        return { success: true };
+      } catch (err: any) {
+        console.error('Lỗi khi xóa Lesson (API backend):', err);
+        return { success: false, error: err.message || 'Lỗi khi xóa lịch học.' };
       }
+    } else {
+      setLessons(prev => prev.filter(l => l.id !== id));
+      await addAuditLog('Xóa lịch học', `Xóa hẳn sự kiện lịch học mã ID: ${id}.`);
+      return { success: true };
     }
-
-    await addAuditLog('Xóa lịch học', `Xóa hẳn sự kiện lịch học mã ID: ${id}.`);
   };
 
-  const authFetch = async (url: string, options: RequestInit = {}) => {
+  const authFetch = async (url: string, options: RequestInit = {}, timeoutMs: number = CLIENT_API_TIMEOUT_MS) => {
     const user = auth.currentUser;
     if (!user) throw new Error("Chưa đăng nhập Firebase.");
     const token = await user.getIdToken();
     const controller = new AbortController();
-    const timeoutId = window.setTimeout(() => controller.abort(), 12000);
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(url, {
         ...options,
@@ -967,8 +1009,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       return data;
     } catch (error: any) {
-      if (error?.name === "AbortError") {
-        throw new Error("Máy chủ phản hồi quá chậm. Yêu cầu đã dừng sau 12 giây.");
+      if (error?.name === "AbortError" || error?.message?.includes("aborted")) {
+        throw new Error(`Máy chủ phản hồi quá chậm. Yêu cầu đã dừng sau ${timeoutMs / 1000} giây.`);
       }
       throw error;
     } finally {

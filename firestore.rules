@@ -197,14 +197,14 @@ service cloud.firestore {
     match /lessons/{lessonId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
       allow create, update: if (isAdmin() || isStaff()) && isValidId(lessonId) && isValidLesson(incoming());
-      allow delete: if isAdmin() || isStaff();
+      allow delete: if (isAdmin() || isStaff()) && isValidId(lessonId);
     }
 
-    // 6. Payments Collection (Ledger Hardening - Admin, Accountant, and Staff can create/update)
+    // 6. Payments Collection (Ledger Hardening - ONLY Admin, Staff, Accountant authorized)
     match /payments/{paymentId} {
       allow read: if isAdmin() || isStaff() || isAccountant();
       allow create, update: if (isAdmin() || isStaff() || isAccountant()) && isValidId(paymentId) && isValidPayment(incoming());
-      allow delete: if false; // STRICT RESTRICTION: No hard deletions of payments from user client
+      allow delete: if isAdmin() && isValidId(paymentId);
     }
 
     // 7. Availability Overrides
@@ -225,22 +225,20 @@ service cloud.firestore {
     match /auditLogs/{logId} {
       allow read: if isAdmin();
       allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming());
-      allow update, delete: if false; // Append-only system logging
     }
 
     // 10. Global App Settings
     match /settings/{settingsId} {
       allow read: if isSignedIn();
-      allow create, update: if isAdmin() && isValidId(settingsId);
+      allow create: if false;
+      allow update: if isAdmin() && settingsId == "schoolSettings";
       allow delete: if false;
     }
 
     // 11. Payment Installment Locks
     match /paymentInstallmentLocks/{lockId} {
       allow read: if isAdmin() || isStaff() || isAccountant();
-      allow create: if (isAdmin() || isStaff() || isAccountant()) && isValidId(lockId);
-      allow update: if false;
-      allow delete: if (isAdmin() || isStaff() || isAccountant()) && isValidId(lockId);
+      allow create, update, delete: if (isAdmin() || isStaff() || isAccountant()) && isValidId(lockId);
     }
   }
 }

@@ -48,6 +48,7 @@ try {
 if (admin.apps.length === 0) {
   admin.initializeApp({
     projectId: firebaseConfig.projectId,
+    storageBucket: firebaseConfig.storageBucket,
   });
 }
 
@@ -352,6 +353,11 @@ function getInstallmentLockId(studentId: string, category: string): string | nul
 }
 
 async function restSetDoc(token: string, collection: string, docId: string, data: any): Promise<void> {
+  const isProd = process.env.NODE_ENV === "production";
+  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
+  if (isProd || !allowDevRest) {
+    throw new Error("SERVER_FIREBASE_ADMIN_NOT_CONFIGURED");
+  }
   const projectId = firebaseConfig.projectId;
   const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
   
@@ -388,6 +394,16 @@ async function restSetDoc(token: string, collection: string, docId: string, data
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function checkRestWriteFallbackAllowed(res: any): boolean {
+  const isProd = process.env.NODE_ENV === "production";
+  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
+  if (isProd || !allowDevRest) {
+    res.status(500).json({ error: "SERVER_FIREBASE_ADMIN_NOT_CONFIGURED" });
+    return false;
+  }
+  return true;
 }
 
 async function restListDocs(token: string, collection: string): Promise<any[]> {
@@ -673,6 +689,7 @@ async function startServer() {
         const isPermissionError = dbErr.message?.includes("permissions") || dbErr.message?.includes("PERMISSION_DENIED") || dbErr.code === 7;
         const token = (req as any).userToken;
         if (isPermissionError && token) {
+          if (!checkRestWriteFallbackAllowed(res)) return;
           console.log("adminDb set in create-user failed due to permission; starting REST fallback...");
           await restSetDoc(token, "users", userRecord.uid, userProfile);
           await restSetDoc(token, "auditLogs", logId, logData);
@@ -685,6 +702,615 @@ async function startServer() {
     } catch (error: any) {
       console.error("Lỗi thiết lập tài khoản thành viên mới:", error);
       return res.status(500).json({ error: error.message || "Lỗi máy chủ khi thiết lập tài khoản." });
+    }
+  });
+
+  app.get("/api/health", (req, res) => {
+    res.json({
+      ok: true,
+      environment: process.env.NODE_ENV || "development",
+      firebaseAdminInitialized: admin.apps.length > 0,
+      geminiConfigured: !!process.env.GEMINI_API_KEY
+    });
+  });
+
+  app.get("/api/students/:studentId/document-url", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ tuyển sinh mới được phép xem tài liệu định danh học viên." });
+    }
+    const { studentId } = req.params;
+    const { kind } = req.query;
+    if (kind !== "cccd" && kind !== "eid") {
+      return res.status(400).json({ error: "Tham số kind phải là 'cccd' hoặc 'eid'." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentDoc = await adminDb.collection("students").doc(studentId).get();
+      if (!studentDoc.exists) {
+        return res.status(404).json({ error: "Không tìm thấy hồ sơ học viên." });
+      }
+      const studentData = studentDoc.data() || {};
+      const storagePath = kind === "cccd" ? studentData.cccdStoragePath : studentData.eidStoragePath;
+      if (!storagePath) {
+        // Fallback for legacy database records
+        const legacyImageUrl = kind === "cccd" ? studentData.cccdImage : studentData.eidImage;
+        if (legacyImageUrl) {
+          console.warn(`[Legacy fallback] Using public image url for student ${studentId}`);
+          return res.json({ url: legacyImageUrl });
+        }
+        return res.status(404).json({ error: "Chưa cấu hình đường dẫn tài liệu định danh này cho học viên." });
+      }
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(storagePath);
+      const [signedUrl] = await file.getSignedUrl({
+        action: 'read',
+        expires: Date.now() + 5 * 60 * 1000 // 5 minutes
+      });
+      return res.json({ url: signedUrl });
+    } catch (err: any) {
+      console.error("Lỗi lấy signed URL:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi tạo signed URL." });
+    }
+  });
+
+  app.post("/api/students/create", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ mới được phép thêm học viên." });
+    }
+    const studentData = req.body;
+    let studentId = studentData.id;
+    if (!studentId || !/^[a-zA-Z0-9_-]{1,128}$/.test(studentId)) {
+      studentId = `stud_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    }
+    const totalFee = Number(studentData.totalFee || 0);
+    const totalSessions = Number(studentData.totalSessions || 0);
+    if (!studentData.name || !studentData.phone) {
+      return res.status(400).json({ error: "Tên học viên và số điện thoại không được bỏ trống." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const yy = new Date().getFullYear().toString().slice(-2);
+      let studentCode = "";
+
+      const newStudent = await adminDb.runTransaction(async (transaction) => {
+        const counterRef = adminDb.collection("settings").doc("studentCounter");
+        const counterDoc = await transaction.get(counterRef);
+        let nextNum = 1;
+        if (counterDoc.exists) {
+          nextNum = counterDoc.data()?.nextCodeNo || 1;
+        }
+        studentCode = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
+        transaction.set(counterRef, { nextCodeNo: nextNum + 1 }, { merge: true });
+
+        const freshStudent = {
+          ...studentData,
+          id: studentId,
+          code: studentCode,
+          paidAmount: 0,
+          remainingAmount: totalFee,
+          completedSessions: 0,
+          remainingSessions: totalSessions,
+          registrationDate: studentData.registrationDate || new Date().toISOString().split("T")[0],
+          status: studentData.status || "Mới đăng ký",
+          // Avoid malicious override fields from client
+          theoryCompleted: !!studentData.theoryCompleted,
+          simulationCompleted: !!studentData.simulationCompleted,
+          isArchived: false
+        };
+
+        transaction.set(adminDb.collection("students").doc(studentId), freshStudent);
+
+        const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        transaction.set(adminDb.collection("auditLogs").doc(logId), {
+          id: logId,
+          timestamp: new Date().toISOString(),
+          action: "Thêm học viên học lái",
+          details: `Thành viên ${user.displayName || user.email} đã thêm học viên mới: ${freshStudent.name} (${studentCode}).`,
+          userId: user.uid,
+          userName: user.displayName || user.email || "Staff",
+          userRole: user.role
+        });
+
+        return freshStudent;
+      });
+
+      return res.json({ success: true, student: newStudent });
+    } catch (err: any) {
+      console.error("Lỗi thêm học viên:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi gán học viên mới." });
+    }
+  });
+
+  app.post("/api/students/update-documents", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối." });
+    }
+    const { studentId, avatarImage, cccdStoragePath, eidStoragePath } = req.body;
+    if (!studentId) {
+      return res.status(400).json({ error: "Thiếu mã học viên studentId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentRef = adminDb.collection("students").doc(studentId);
+      const studentDoc = await studentRef.get();
+      if (!studentDoc.exists) {
+        return res.status(404).json({ error: "Không tìm thấy học viên." });
+      }
+      const updates: any = {};
+      if (avatarImage !== undefined) updates.avatarImage = avatarImage;
+      if (cccdStoragePath !== undefined) updates.cccdStoragePath = cccdStoragePath;
+      if (eidStoragePath !== undefined) updates.eidStoragePath = eidStoragePath;
+
+      await studentRef.update(updates);
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Cập nhật hồ sơ giấy tờ",
+        details: `Thành viên ${user.displayName || user.email} đã cập nhật hồ sơ giấy tờ hoặc ảnh cho học viên ${studentDoc.data()?.name || studentId}.`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        userRole: user.role
+      });
+
+      return res.json({ success: true, updates });
+    } catch (err: any) {
+      console.error("Lỗi cập nhật ảnh hồ sơ:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi cập nhật ảnh hồ sơ." });
+    }
+  });
+
+  app.post("/api/students/update", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ mới được sửa thông tin học viên." });
+    }
+    const { studentId, ...updatedData } = req.body;
+    if (!studentId) {
+      return res.status(400).json({ error: "Thiếu studentId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentRef = adminDb.collection("students").doc(studentId);
+      const studentDoc = await studentRef.get();
+      if (!studentDoc.exists) {
+        return res.status(404).json({ error: "Không tìm thấy học viên." });
+      }
+      
+      const allowedUpdates: any = { ...updatedData };
+      delete allowedUpdates.id;
+      delete allowedUpdates.code;
+      delete allowedUpdates.paidAmount;
+      delete allowedUpdates.remainingAmount;
+      delete allowedUpdates.completedSessions;
+      delete allowedUpdates.remainingSessions;
+      delete allowedUpdates.archivedAt;
+      delete allowedUpdates.archivedBy;
+      delete allowedUpdates.isArchived;
+
+      // Handle totalFee change gracefully - recalculate remainingAmount
+      const oldData = studentDoc.data() || {};
+      if (allowedUpdates.totalFee !== undefined) {
+        const newFee = Number(allowedUpdates.totalFee);
+        const paid = Number(oldData.paidAmount || 0);
+        allowedUpdates.remainingAmount = Math.max(0, newFee - paid);
+      }
+      if (allowedUpdates.totalSessions !== undefined) {
+        const totalS = Number(allowedUpdates.totalSessions);
+        const completed = Number(oldData.completedSessions || 0);
+        allowedUpdates.remainingSessions = Math.max(0, totalS - completed);
+      }
+
+      await studentRef.update(allowedUpdates);
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Sửa thông tin học viên",
+        details: `Thành viên ${user.displayName || user.email} đã sửa hồ sơ của học viên ${oldData.name} (${oldData.code}).`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        userRole: user.role
+      });
+
+      return res.json({ success: true, updates: allowedUpdates });
+    } catch (err: any) {
+      console.error("Lỗi sửa thông tin học viên:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi lưu hồ sơ." });
+    }
+  });
+
+  app.post("/api/students/archive", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (user.role !== "Admin") {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Chỉ quản trị viên mới được phép lưu trữ (archive) học viên." });
+    }
+    const { studentId } = req.body;
+    if (!studentId) {
+      return res.status(400).json({ error: "Thiếu mã học viên studentId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentRef = adminDb.collection("students").doc(studentId);
+      const studentDoc = await studentRef.get();
+      if (!studentDoc.exists) {
+        return res.status(404).json({ error: "Không tìm thấy học viên." });
+      }
+      const oldData = studentDoc.data() || {};
+      const updates = {
+        isArchived: true,
+        archivedAt: new Date().toISOString(),
+        archivedBy: user.displayName || user.email || "Admin",
+        status: "Tạm dừng" as const
+      };
+      await studentRef.update(updates);
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Lưu trữ học viên",
+        details: `Quản trị viên ${user.displayName || user.email} đã chuyển trạng thái lưu trữ cho học viên ${oldData.name} (${oldData.code}).`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Admin",
+        userRole: user.role
+      });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Lỗi lưu trữ học viên:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi lưu trữ học viên." });
+    }
+  });
+
+  app.post("/api/students/delete", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (user.role !== "Admin") {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Chỉ Admin mới được quyền xóa vĩnh viễn học viên." });
+    }
+    const { studentId } = req.body;
+    if (!studentId) {
+      return res.status(400).json({ error: "Thiếu mã học viên studentId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentRef = adminDb.collection("students").doc(studentId);
+      const studentDoc = await studentRef.get();
+      if (!studentDoc.exists) {
+        return res.status(404).json({ error: "Không tìm thấy học viên." });
+      }
+      const oldData = studentDoc.data() || {};
+
+      // Check lessons and payments
+      const lessonsSnap = await adminDb.collection("lessons").where("studentId", "==", studentId).limit(1).get();
+      const paymentsSnap = await adminDb.collection("payments").where("studentId", "==", studentId).limit(1).get();
+      if (!lessonsSnap.empty || !paymentsSnap.empty) {
+        return res.status(400).json({ error: "Không thể xóa học viên do đã tồn tại dữ liệu hóa đơn học phí hoặc buổi học sắp xếp." });
+      }
+
+      await studentRef.delete();
+
+      // Best effort clean files from storage
+      try {
+        const bucket = admin.storage().bucket();
+        if (oldData.cccdStoragePath) {
+          await bucket.file(oldData.cccdStoragePath).delete().catch(() => {});
+        }
+        if (oldData.eidStoragePath) {
+          await bucket.file(oldData.eidStoragePath).delete().catch(() => {});
+        }
+      } catch (stErr) {
+        console.warn("Best effort storage cleanup failed:", stErr);
+      }
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Xóa học viên",
+        details: `Quản trị viên ${user.displayName || user.email} đã xóa vĩnh viễn học viên ${oldData.name} và mọi tệp tin kèm theo khỏi hệ thống.`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Admin",
+        userRole: "Admin"
+      });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Lỗi xóa học viên:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xóa học viên." });
+    }
+  });
+
+  app.post("/api/lessons/create", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền xếp lịch học chỉ dành cho Admin hoặc Staff giáo vụ." });
+    }
+    const lesson = req.body;
+    const { override, overrideReason } = req.query; // Admin override if true
+    if (!lesson.studentId || !lesson.instructorId || !lesson.vehicleId || !lesson.date || !lesson.startTime || !lesson.endTime) {
+      return res.status(400).json({ error: "Thông tin buổi học khuyết thiếu các trường bắt buộc." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const studentSnap = await adminDb.collection("students").doc(lesson.studentId).get();
+      const instructorSnap = await adminDb.collection("instructors").doc(lesson.instructorId).get();
+      const vehicleSnap = await adminDb.collection("vehicles").doc(lesson.vehicleId).get();
+
+      if (!studentSnap.exists) return res.status(400).json({ error: "Học viên liên kết lịch học không khả dụng." });
+      if (!instructorSnap.exists) return res.status(400).json({ error: "Giáo viên hướng dẫn liên kết không tồn tại." });
+      if (!vehicleSnap.exists) return res.status(400).json({ error: "Xe liên kết không tồn tại hoặc đã bị xóa." });
+
+      const student = studentSnap.data() || {};
+      const instructor = instructorSnap.data() || {};
+      const vehicle = vehicleSnap.data() || {};
+
+      // Time validity
+      if (lesson.startTime >= lesson.endTime) {
+        return res.status(400).json({ error: "Thời gian bắt đầu xếp lịch phải trước giờ kết thúc." });
+      }
+
+      // 1. Check vehicle availability
+      if (vehicle.status !== "Sẵn sàng" && override !== "true") {
+        return res.status(400).json({ error: `Xe tập lái hiện trạng thái '${vehicle.status}' không khả dụng xếp lịch.` });
+      }
+
+      // 2. Instructor working Day
+      const dateObj = new Date(lesson.date);
+      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 1 = Monday,... 6 = Saturday
+      const workingDays: number[] = instructor.workingDays || [];
+      if (!workingDays.includes(dayOfWeek) && override !== "true") {
+        return res.status(400).json({ error: `Giáo viên ${instructor.name} không đăng ký lịch dạy vào Thứ có mã số ${dayOfWeek}.` });
+      }
+
+      // 3. Instructor daysOff
+      const daysOff: string[] = instructor.daysOff || [];
+      if (daysOff.includes(lesson.date) && override !== "true") {
+        return res.status(400).json({ error: `Giáo viên ${instructor.name} xin nghỉ phép vào ngày ${lesson.date} này.` });
+      }
+
+      // 4. Time range fit
+      const workStart = instructor.workingHours?.start || "07:30";
+      const workEnd = instructor.workingHours?.end || "17:30";
+      if ((lesson.startTime < workStart || lesson.endTime > workEnd) && override !== "true") {
+        return res.status(400).json({ error: `Lịch học (${lesson.startTime} - ${lesson.endTime}) nằm ngoài khung giờ làm việc của giáo viên (${workStart} - ${workEnd}).` });
+      }
+
+      // 5. Overlap scan
+      const activeStatusList = ["Chờ xác nhận", "Đã xác nhận", "Đã hoàn thành"];
+      const conflicts: string[] = [];
+
+      // Check overlapping of Instructor
+      const instructorLessons = await adminDb.collection("lessons")
+        .where("instructorId", "==", lesson.instructorId)
+        .where("date", "==", lesson.date)
+        .get();
+      
+      for (const dDoc of instructorLessons.docs) {
+        const l = dDoc.data();
+        if (activeStatusList.includes(l.status)) {
+          if (lesson.startTime < l.endTime && lesson.endTime > l.startTime) {
+            conflicts.push(`Lịch của giáo viên bị trùng với lịch giảng dạy mã ${l.id} (${l.startTime} - ${l.endTime})`);
+          }
+        }
+      }
+
+      // Check overlapping of Vehicle
+      const vehicleLessons = await adminDb.collection("lessons")
+        .where("vehicleId", "==", lesson.vehicleId)
+        .where("date", "==", lesson.date)
+        .get();
+
+      for (const dDoc of vehicleLessons.docs) {
+        const l = dDoc.data();
+        if (activeStatusList.includes(l.status)) {
+          if (lesson.startTime < l.endTime && lesson.endTime > l.startTime) {
+            conflicts.push(`Lịch của xe bị trùng với lịch của học viên khác mã ${l.id} (${l.startTime} - ${l.endTime})`);
+          }
+        }
+      }
+
+      // Check overlapping of Student
+      const studentLessons = await adminDb.collection("lessons")
+        .where("studentId", "==", lesson.studentId)
+        .where("date", "==", lesson.date)
+        .get();
+
+      for (const dDoc of studentLessons.docs) {
+        const l = dDoc.data();
+        if (activeStatusList.includes(l.status)) {
+          if (lesson.startTime < l.endTime && lesson.endTime > l.startTime) {
+            conflicts.push(`Lịch của học viên bị trùng lịch tự xếp mã ${l.id} (${l.startTime} - ${l.endTime})`);
+          }
+        }
+      }
+
+      if (conflicts.length > 0) {
+        if (override === "true" && user.role === "Admin") {
+          if (!overrideReason) {
+            return res.status(400).json({ error: "Yêu cầu cung cấp lý do Admin ép đè thời gian (overrideReason)." });
+          }
+          console.log(`Admin overrode calendar conflict: ${overrideReason}`);
+        } else {
+          return res.status(409).json({ error: "Lịch học chồng chéo mốc thời gian đã đăng ký.", conflicts });
+        }
+      }
+
+      // Create lesson
+      const lessonId = lesson.id || `les_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const freshLesson = {
+        ...lesson,
+        id: lessonId,
+        status: lesson.status || "Chờ xác nhận",
+        attendanceStatus: lesson.attendanceStatus || "Chưa điểm danh",
+        resultNote: lesson.resultNote || ""
+      };
+
+      await adminDb.collection("lessons").doc(lessonId).set(freshLesson);
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Xếp lịch học",
+        details: `Đăng ký thành công ca học mới cho học viên ${student.name} mã lịch ${lessonId} (${lesson.date} ${lesson.startTime} - ${lesson.endTime})${override === "true" ? " [Ghi đè bởi Admin: " + overrideReason + "]" : ""}.`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        userRole: user.role
+      });
+
+      return res.json({ success: true, lesson: freshLesson });
+
+    } catch (err: any) {
+      console.error("Lỗi xếp lịch:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xếp lịch học." });
+    }
+  });
+
+  app.post("/api/lessons/update", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền sửa lịch học chỉ dành cho Admin hoặc Staff giáo vụ." });
+    }
+    const { id: lessonId, ...updates } = req.body;
+    if (!lessonId) {
+      return res.status(400).json({ error: "Thiếu lessonId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const lessonRef = adminDb.collection("lessons").doc(lessonId);
+      const lessonSnap = await lessonRef.get();
+      if (!lessonSnap.exists) {
+        return res.status(404).json({ error: "Không tìm thấy buổi học lịch liên kết." });
+      }
+      const oldLesson = lessonSnap.data() || {};
+      const studentId = oldLesson.studentId;
+
+      await adminDb.runTransaction(async (transaction) => {
+        transaction.update(lessonRef, updates);
+
+        // Track completedSessions updates if status changes
+        if (updates.status !== undefined && updates.status !== oldLesson.status) {
+          const wasCompleted = oldLesson.status === "Đã hoàn thành";
+          const isCompleted = updates.status === "Đã hoàn thành";
+          if (wasCompleted !== isCompleted) {
+            const studentRef = adminDb.collection("students").doc(studentId);
+            const studentDoc = await transaction.get(studentRef);
+            if (studentDoc.exists) {
+              const sData = studentDoc.data() || {};
+              const diff = isCompleted ? 1 : -1;
+              const newCompleted = Math.max(0, (sData.completedSessions || 0) + diff);
+              const newRemaining = Math.max(0, (sData.totalSessions || 0) - newCompleted);
+              transaction.update(studentRef, {
+                completedSessions: newCompleted,
+                remainingSessions: newRemaining
+              });
+            }
+          }
+        }
+      });
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Cập nhật lịch học",
+        details: `Cập nhật thành công trạng thái ca lịch ID ${lessonId} của học viên ID ${studentId} thành '${updates.status || oldLesson.status}'.`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        userRole: user.role
+      });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Lỗi cập nhật buổi học:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi cập nhật buổi học." });
+    }
+  });
+
+  app.post("/api/lessons/delete", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (!["Admin", "Staff"].includes(user.role)) {
+      return res.status(403).json({ error: "Quyền xóa lịch học chỉ dành cho Admin hoặc Staff giáo vụ." });
+    }
+    const { lessonId } = req.body;
+    if (!lessonId) {
+      return res.status(400).json({ error: "Thiếu lessonId." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const lessonRef = adminDb.collection("lessons").doc(lessonId);
+      const lessonSnap = await lessonRef.get();
+      if (!lessonSnap.exists) {
+        return res.status(404).json({ error: "Không tìm thấy buổi học cần xóa." });
+      }
+      const lessonData = lessonSnap.data() || {};
+      const studentId = lessonData.studentId;
+
+      await adminDb.runTransaction(async (transaction) => {
+        transaction.delete(lessonRef);
+        
+        if (lessonData.status === "Đã hoàn thành") {
+          const studentRef = adminDb.collection("students").doc(studentId);
+          const studentDoc = await transaction.get(studentRef);
+          if (studentDoc.exists) {
+            const sData = studentDoc.data() || {};
+            const newCompleted = Math.max(0, (sData.completedSessions || 0) - 1);
+            const newRemaining = Math.max(0, (sData.totalSessions || 0) - newCompleted);
+            transaction.update(studentRef, {
+              completedSessions: newCompleted,
+              remainingSessions: newRemaining
+            });
+          }
+        }
+      });
+
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      await adminDb.collection("auditLogs").doc(logId).set({
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action: "Xóa ca học",
+        details: `Cán bộ ${user.displayName || user.email} đã xóa ca học mã lịch ${lessonId} của học viên ID ${studentId}.`,
+        userId: user.uid,
+        userName: user.displayName || user.email || "Staff",
+        userRole: user.role
+      });
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Lỗi xóa ca học:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xóa ca học." });
+    }
+  });
+
+  app.post("/api/audit-logs/create", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    const { action, details } = req.body;
+    if (!action || !details) {
+      return res.status(400).json({ error: "Thiếu action hoặc chi tiết logs." });
+    }
+    try {
+      const adminDb = getAdminDb();
+      const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+      const logData = {
+        id: logId,
+        timestamp: new Date().toISOString(),
+        action,
+        details,
+        userId: user.uid,
+        userName: user.displayName || user.email || "User",
+        userRole: user.role
+      };
+      await adminDb.collection("auditLogs").doc(logId).set(logData);
+      return res.json({ success: true, log: logData });
+    } catch (err: any) {
+      console.error("Lỗi khởi tạo audit log:", err);
+      return res.status(500).json({ error: err.message || "Lỗi máy chủ khi ghi nhật ký." });
     }
   });
 
@@ -805,6 +1431,7 @@ async function startServer() {
       }
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
+        if (!checkRestWriteFallbackAllowed(res)) return;
         console.log("adminDb transaction in payments/create failed due to permission; starting REST fallback...");
         if (!["Admin", "Staff", "Accountant"].includes(user.role)) {
           return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản được cấp quyền (Admin, Accountant, Staff)." });
@@ -987,6 +1614,7 @@ async function startServer() {
     } catch (error: any) {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
+        if (!checkRestWriteFallbackAllowed(res)) return;
         console.log("adminDb transaction in payments/approve failed due to permission; starting REST fallback...");
         if (!["Admin", "Accountant"].includes(user.role)) {
           return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin hoặc Kế toán." });
@@ -1355,6 +1983,7 @@ async function startServer() {
     } catch (error: any) {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
+        if (!checkRestWriteFallbackAllowed(res)) return;
         console.log("adminDb transaction in payments/reconcile-student failed due to permission; starting REST fallback...");
         if (!["Admin", "Accountant"].includes(user.role)) {
           return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản Admin hoặc Kế toán." });
@@ -1623,6 +2252,7 @@ async function startServer() {
     } catch (error: any) {
       const isPermissionError = error.message?.includes("permissions") || error.message?.includes("PERMISSION_DENIED") || error.code === 7;
       if (isPermissionError && token) {
+        if (!checkRestWriteFallbackAllowed(res)) return;
         console.log("adminDb transaction in lessons/batch-confirm failed due to permission; starting REST fallback...");
         try {
           // Fetch existing data via REST
@@ -1803,9 +2433,12 @@ async function startServer() {
   const ocrRateLimits = new Map<string, { count: number; resetTime: number }>();
 
   // API Endpoint to process OCR on identity cards (CCCD) / profiles
-  app.post("/api/ocr-card", checkOcrAuth, async (req, res) => {
+  app.post("/api/ocr-card", checkAuth, async (req, res) => {
     try {
       const user = req.currentUserProfile;
+      if (!user || !["Admin", "Staff"].includes(user.role)) {
+        return res.status(403).json({ error: "Chức năng nhận diện OCR chỉ cho phép tài khoản Admin hoặc Nhân viên." });
+      }
       const now = Date.now();
       const userLimit = ocrRateLimits.get(user.uid);
 

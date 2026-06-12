@@ -11,15 +11,24 @@ service firebase.storage {
       return request.resource.size < 4 * 1024 * 1024
         && request.resource.contentType.matches('image/(jpeg|png|webp)');
     }
+    function getRole() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function hasRole(roles) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && getRole() in roles;
+    }
     match /students/{studentId}/{kind}/{fileName} {
-      // TODO SECURITY: Before production, restrict CCCD and EID access
-      // to Admin and Staff roles using firestore.get() role lookup.
-      // Avatar permissions may be handled separately.
       allow read: if signedIn()
         && validStudentId(studentId)
-        && (kind == 'cccd' || kind == 'eid' || kind == 'avatar');
+        && (
+          (kind == 'avatar' && hasRole(['Admin', 'Staff', 'Instructor', 'Accountant'])) ||
+          ((kind == 'cccd' || kind == 'eid') && hasRole(['Admin', 'Staff']))
+        );
       allow write: if signedIn()
         && validStudentId(studentId)
+        && hasRole(['Admin', 'Staff'])
         && (kind == 'cccd' || kind == 'eid' || kind == 'avatar')
         && validImageUpload();
     }

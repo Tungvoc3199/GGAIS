@@ -2104,10 +2104,14 @@ export const Students: React.FC<StudentsProps> = ({
                       const val = e.target.value as any;
                       setNewLicenseClass(val);
                       // Auto populate defaults for license types
-                      if (val.includes('B')) {
+                      if (val === 'B số tự động') {
                         setNewCourseType('Trọn gói hạng B1');
                         setNewTotalFee(15000000);
                         setNewTotalSessions(14);
+                      } else if (val === 'B số sàn') {
+                        setNewCourseType('Trọn gói hạng B2');
+                        setNewTotalFee(14000000);
+                        setNewTotalSessions(12);
                       } else if (val === 'C1') {
                         setNewCourseType('Hạng C');
                         setNewTotalFee(18000000);

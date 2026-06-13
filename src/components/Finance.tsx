@@ -170,8 +170,8 @@ export const Finance: React.FC = () => {
   };
 
   const handleTriggerCancel = (payId: string) => {
-    if (currentUser?.role === 'Staff') {
-      alert('Tài khoản tuyển sinh (Staff) không được phép can thiệp ghi nhận lại tài chính.');
+    if (currentUser?.role !== 'Admin') {
+      alert('Quyền truy cập bị từ chối: Chỉ Admin mới được phép hủy chứng từ doanh thu.');
       return;
     }
     setCancellingPayId(payId);
@@ -427,7 +427,7 @@ export const Finance: React.FC = () => {
                         <td className="py-3 px-4">{statusBadge}</td>
                         <td className="py-3 px-4 font-semibold text-slate-500">{p.receiver}</td>
                         <td className="py-3 px-4 text-center">
-                          {!p.isCancelled && (currentUser?.role === 'Admin' || currentUser?.role === 'Accountant') && (
+                          {!p.isCancelled && currentUser?.role === 'Admin' && (
                             <button
                               onClick={() => handleTriggerCancel(p.id)}
                               className="text-[10px] text-red-600 hover:bg-red-50 hover:border-red-200 border border-transparent px-2 py-1 rounded-md transition-all cursor-pointer"

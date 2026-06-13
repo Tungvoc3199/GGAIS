@@ -17,5 +17,9 @@ jobs:
           cache: npm
       - name: Install dependencies clean
         run: npm ci
-      - name: Verify lint, build and static security
-        run: npm run verify
+      - name: TypeScript check
+        run: npm run lint
+      - name: Static Security check
+        run: npm run verify:static
+      - name: Production build
+        run: npm run build

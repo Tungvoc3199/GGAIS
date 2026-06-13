@@ -271,7 +271,7 @@ export const Students: React.FC<StudentsProps> = ({
   }, [quickFormOpen, quickFormType, onCloseQuickForm]);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
-  const [newDob, setNewDob] = useState('2000-01-01');
+  const [newDob, setNewDob] = useState('');
   const [newAddress, setNewAddress] = useState('');
   const [newLicenseClass, setNewLicenseClass] = useState<'A1' | 'A' | 'B số tự động' | 'B số sàn' | 'C1'>('B số tự động');
   const [newCourseType, setNewCourseType] = useState('Trọn gói hạng B số tự động');
@@ -635,6 +635,7 @@ export const Students: React.FC<StudentsProps> = ({
       // Reset Form (Only on safe success)
       setNewName('');
       setNewPhone('');
+      setNewDob('');
       setNewAddress('');
       setNewNotes('');
       setNewTags([]);

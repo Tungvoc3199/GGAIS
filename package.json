@@ -12,7 +12,7 @@
     "lint": "tsc --noEmit",
     "verify:static": "node scripts/static-security-check.mjs",
     "verify:security": "node scripts/security-smoke-check.mjs",
-    "verify": "npm run lint && npm run build && npm run verify:static"
+    "verify": "npm run verify:static && npm run verify:security"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

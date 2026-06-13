@@ -1156,8 +1156,8 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const cancelPayment = async (id: string, reason: string): Promise<{ success: boolean; duplicated?: boolean; message?: string }> => {
-    if (currentUser?.role === "Staff") {
-      throw new Error("Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu.");
+    if (currentUser?.role !== "Admin") {
+      throw new Error("Quyền truy cập bị từ chối: Chỉ Admin mới được phép hủy chứng từ doanh thu.");
     }
     if (!reason.trim()) {
       throw new Error("Bắt buộc nhập lý do hủy phiếu.");

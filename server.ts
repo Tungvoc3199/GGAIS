@@ -353,6 +353,13 @@ function getInstallmentLockId(studentId: string, category: string): string | nul
 }
 
 async function restSetDoc(token: string, collection: string, docId: string, data: any): Promise<void> {
+  const isProd = process.env.NODE_ENV === "production";
+  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
+
+  if (isProd || !allowDevRest) {
+    throw new Error("SERVER_FIREBASE_ADMIN_NOT_CONFIGURED");
+  }
+
   const projectId = firebaseConfig.projectId;
   const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
   
@@ -392,6 +399,16 @@ async function restSetDoc(token: string, collection: string, docId: string, data
 }
 
 function checkRestWriteFallbackAllowed(res: any): boolean {
+  const isProd = process.env.NODE_ENV === "production";
+  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
+
+  if (isProd || !allowDevRest) {
+    res.status(500).json({
+      error: "SERVER_FIREBASE_ADMIN_NOT_CONFIGURED"
+    });
+    return false;
+  }
+
   return true;
 }
 
@@ -2278,8 +2295,10 @@ async function startServer() {
   // 4. Cancels payments securely, reversing balances on student document in transaction
   app.post("/api/payments/cancel", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
-    if (!["Admin", "Accountant"].includes(user.role)) {
-      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu." });
+    if (user.role !== "Admin") {
+      return res.status(403).json({
+        error: "Quyền truy cập bị từ chối: Chỉ Admin mới được phép hủy chứng từ doanh thu."
+      });
     }
 
     const { paymentId, reason } = req.body;

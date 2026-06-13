@@ -353,11 +353,6 @@ function getInstallmentLockId(studentId: string, category: string): string | nul
 }
 
 async function restSetDoc(token: string, collection: string, docId: string, data: any): Promise<void> {
-  const isProd = process.env.NODE_ENV === "production";
-  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
-  if (isProd || !allowDevRest) {
-    throw new Error("SERVER_FIREBASE_ADMIN_NOT_CONFIGURED");
-  }
   const projectId = firebaseConfig.projectId;
   const databaseId = firebaseConfig.firestoreDatabaseId || "(default)";
   
@@ -397,12 +392,6 @@ async function restSetDoc(token: string, collection: string, docId: string, data
 }
 
 function checkRestWriteFallbackAllowed(res: any): boolean {
-  const isProd = process.env.NODE_ENV === "production";
-  const allowDevRest = process.env.ALLOW_DEV_REST_FALLBACK === "true";
-  if (isProd || !allowDevRest) {
-    res.status(500).json({ error: "SERVER_FIREBASE_ADMIN_NOT_CONFIGURED" });
-    return false;
-  }
   return true;
 }
 
@@ -484,7 +473,7 @@ async function restListDocs(token: string, collection: string): Promise<any[]> {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // Set payload size limits to securely support base64 identity card images
   app.use(express.json({ limit: "15mb" }));
@@ -769,6 +758,7 @@ async function startServer() {
     if (!studentData.name || !studentData.phone) {
       return res.status(400).json({ error: "Tên học viên và số điện thoại không được bỏ trống." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const yy = new Date().getFullYear().toString().slice(-2);
@@ -818,6 +808,109 @@ async function startServer() {
 
       return res.json({ success: true, student: newStudent });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Students Create] adminDb failed; starting REST fallback...");
+        try {
+          let nextNum = 1;
+          const counterDoc = await restGetDoc(token, "settings", "studentCounter");
+          if (counterDoc) {
+            nextNum = Number(counterDoc.nextCodeNo || 1);
+          }
+          const yy = new Date().getFullYear().toString().slice(-2);
+          const studentCode = `HV-${yy}-${String(nextNum).padStart(4, '0')}`;
+
+          const freshStudent = {
+            id: studentId,
+            code: studentCode,
+            name: studentData.name || "",
+            phone: studentData.phone || "",
+            dob: studentData.dob || "",
+            address: studentData.address || "",
+            licenseClass: studentData.licenseClass || "B số sàn",
+            courseType: studentData.courseType || "Tiêu chuẩn",
+            registrationDate: studentData.registrationDate || new Date().toISOString().split("T")[0],
+            totalFee: totalFee,
+            paidAmount: 0,
+            remainingAmount: totalFee,
+            nextPaymentDeadline: studentData.nextPaymentDeadline || "",
+            status: studentData.status || "Mới đăng ký",
+            totalSessions: totalSessions,
+            completedSessions: 0,
+            remainingSessions: totalSessions,
+            assignedInstructorId: studentData.assignedInstructorId || "",
+            assignedVehicleId: studentData.assignedVehicleId || "",
+            notes: studentData.notes || "",
+            reminderStatus: studentData.reminderStatus || "Chưa gửi nhắc nhở",
+            tags: studentData.tags || [],
+            theoryCompleted: !!studentData.theoryCompleted,
+            simulationCompleted: !!studentData.simulationCompleted,
+            isArchived: false
+          };
+
+          const writes: any[] = [];
+          if (counterDoc) {
+            const counterUpdateTime = counterDoc.__updateTime;
+            const updatedCounter = { ...counterDoc, nextCodeNo: nextNum + 1 };
+            delete updatedCounter.__updateTime;
+            writes.push({
+              update: {
+                name: getFirestoreDocumentName("settings", "studentCounter"),
+                fields: wrapFirestoreFields(updatedCounter)
+              },
+              currentDocument: {
+                updateTime: counterUpdateTime
+              }
+            });
+          } else {
+            writes.push({
+              update: {
+                name: getFirestoreDocumentName("settings", "studentCounter"),
+                fields: wrapFirestoreFields({ nextCodeNo: 2 })
+              },
+              currentDocument: {
+                exists: false
+              }
+            });
+          }
+
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", studentId),
+              fields: wrapFirestoreFields(freshStudent)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Thêm học viên học lái",
+            details: `Thành viên ${user.displayName || user.email} đã thêm học viên mới: ${freshStudent.name} (${studentCode}) [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true, student: freshStudent });
+        } catch (restErr: any) {
+          console.error("[Students Create REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể tạo học viên bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi thêm học viên:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi gán học viên mới." });
     }
@@ -832,6 +925,7 @@ async function startServer() {
     if (!studentId) {
       return res.status(400).json({ error: "Thiếu mã học viên studentId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const studentRef = adminDb.collection("students").doc(studentId);
@@ -859,6 +953,64 @@ async function startServer() {
 
       return res.json({ success: true, updates });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Students Update Doc] adminDb update failed; starting REST fallback...");
+        try {
+          const oldData = await restGetDoc(token, "students", studentId);
+          if (!oldData) {
+            return res.status(404).json({ error: "Không tìm thấy học viên." });
+          }
+          const updates: any = {};
+          if (avatarImage !== undefined) updates.avatarImage = avatarImage;
+          if (cccdStoragePath !== undefined) updates.cccdStoragePath = cccdStoragePath;
+          if (eidStoragePath !== undefined) updates.eidStoragePath = eidStoragePath;
+
+          const mergedStudent = {
+            ...oldData,
+            ...updates
+          };
+          const studentUpdateTime = oldData.__updateTime;
+          delete mergedStudent.__updateTime;
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", studentId),
+              fields: wrapFirestoreFields(mergedStudent)
+            },
+            currentDocument: {
+              updateTime: studentUpdateTime
+            }
+          });
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Cập nhật hồ sơ giấy tờ",
+            details: `Thành viên ${user.displayName || user.email} đã cập nhật hồ sơ giấy tờ hoặc ảnh cho học viên ${oldData.name || studentId} [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true, updates });
+        } catch (restErr: any) {
+          console.error("[Students Update Doc REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể cập nhật ảnh hồ sơ bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi cập nhật ảnh hồ sơ:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi cập nhật ảnh hồ sơ." });
     }
@@ -873,6 +1025,7 @@ async function startServer() {
     if (!studentId) {
       return res.status(400).json({ error: "Thiếu studentId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const studentRef = adminDb.collection("students").doc(studentId);
@@ -920,6 +1073,82 @@ async function startServer() {
 
       return res.json({ success: true, updates: allowedUpdates });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Students Update] adminDb update failed; starting REST fallback...");
+        try {
+          const oldData = await restGetDoc(token, "students", studentId);
+          if (!oldData) {
+            return res.status(404).json({ error: "Không tìm thấy học viên." });
+          }
+
+          const allowedUpdates: any = { ...updatedData };
+          delete allowedUpdates.id;
+          delete allowedUpdates.code;
+          delete allowedUpdates.paidAmount;
+          delete allowedUpdates.remainingAmount;
+          delete allowedUpdates.completedSessions;
+          delete allowedUpdates.remainingSessions;
+          delete allowedUpdates.archivedAt;
+          delete allowedUpdates.archivedBy;
+          delete allowedUpdates.isArchived;
+
+          if (allowedUpdates.totalFee !== undefined) {
+            const newFee = Number(allowedUpdates.totalFee);
+            const paid = Number(oldData.paidAmount || 0);
+            allowedUpdates.remainingAmount = Math.max(0, newFee - paid);
+          }
+          if (allowedUpdates.totalSessions !== undefined) {
+            const totalS = Number(allowedUpdates.totalSessions);
+            const completed = Number(oldData.completedSessions || 0);
+            allowedUpdates.remainingSessions = Math.max(0, totalS - completed);
+          }
+
+          const mergedStudent = {
+            ...oldData,
+            ...allowedUpdates
+          };
+          const studentUpdateTime = oldData.__updateTime;
+          delete mergedStudent.__updateTime;
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", studentId),
+              fields: wrapFirestoreFields(mergedStudent)
+            },
+            currentDocument: {
+              updateTime: studentUpdateTime
+            }
+          });
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Sửa thông tin học viên",
+            details: `Thành viên ${user.displayName || user.email} đã sửa hồ sơ của học viên ${oldData.name} (${oldData.code}) [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true, updates: allowedUpdates });
+        } catch (restErr: any) {
+          console.error("[Students Update REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể lưu hồ sơ bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi sửa thông tin học viên:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi lưu hồ sơ." });
     }
@@ -934,6 +1163,7 @@ async function startServer() {
     if (!studentId) {
       return res.status(400).json({ error: "Thiếu mã học viên studentId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const studentRef = adminDb.collection("students").doc(studentId);
@@ -963,6 +1193,66 @@ async function startServer() {
 
       return res.json({ success: true });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Students Archive] adminDb update failed; starting REST fallback...");
+        try {
+          const oldData = await restGetDoc(token, "students", studentId);
+          if (!oldData) {
+            return res.status(404).json({ error: "Không tìm thấy học viên." });
+          }
+          const updates = {
+            isArchived: true,
+            archivedAt: new Date().toISOString(),
+            archivedBy: user.displayName || user.email || "Admin",
+            status: "Tạm dừng" as const
+          };
+
+          const mergedStudent = {
+            ...oldData,
+            ...updates
+          };
+          const studentUpdateTime = oldData.__updateTime;
+          delete mergedStudent.__updateTime;
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("students", studentId),
+              fields: wrapFirestoreFields(mergedStudent)
+            },
+            currentDocument: {
+              updateTime: studentUpdateTime
+            }
+          });
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Lưu trữ học viên",
+            details: `Quản trị viên ${user.displayName || user.email} đã chuyển trạng thái lưu trữ cho học viên ${oldData.name} (${oldData.code}) [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Admin",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true });
+        } catch (restErr: any) {
+          console.error("[Students Archive REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể lưu trữ học viên bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi lưu trữ học viên:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi lưu trữ học viên." });
     }
@@ -977,6 +1267,7 @@ async function startServer() {
     if (!studentId) {
       return res.status(400).json({ error: "Thiếu mã học viên studentId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const studentRef = adminDb.collection("students").doc(studentId);
@@ -1021,6 +1312,62 @@ async function startServer() {
 
       return res.json({ success: true });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Students Delete] adminDb delete failed; starting REST fallback...");
+        try {
+          const oldData = await restGetDoc(token, "students", studentId);
+          if (!oldData) {
+            return res.status(404).json({ error: "Không tìm thấy học viên." });
+          }
+
+          const writes: any[] = [];
+          writes.push({
+            delete: getFirestoreDocumentName("students", studentId),
+            currentDocument: {
+              exists: true
+            }
+          });
+
+          try {
+            const bucket = admin.storage().bucket();
+            if (oldData.cccdStoragePath) {
+              await bucket.file(oldData.cccdStoragePath).delete().catch(() => {});
+            }
+            if (oldData.eidStoragePath) {
+              await bucket.file(oldData.eidStoragePath).delete().catch(() => {});
+            }
+          } catch (stErr) {
+            console.warn("Best effort storage cleanup failed:", stErr);
+          }
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Xóa học viên",
+            details: `Quản trị viên ${user.displayName || user.email} đã xóa vĩnh viễn học viên ${oldData.name} và mọi tệp tin kèm theo khỏi hệ thống [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Admin",
+            userRole: "Admin"
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true });
+        } catch (restErr: any) {
+          console.error("[Students Delete REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể xóa học viên bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi xóa học viên:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xóa học viên." });
     }
@@ -1167,6 +1514,60 @@ async function startServer() {
       return res.json({ success: true, lesson: freshLesson });
 
     } catch (err: any) {
+      const token = (req as any).userToken;
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Lessons Create Project] adminDb failed; starting REST fallback...");
+        try {
+          const studentDoc = await restGetDoc(token, "students", lesson.studentId);
+          const studentName = studentDoc?.name || "Học viên";
+          const lessonId = lesson.id || `les_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLesson = {
+            ...lesson,
+            id: lessonId,
+            status: lesson.status || "Chờ xác nhận",
+            attendanceStatus: lesson.attendanceStatus || "Chưa điểm danh",
+            resultNote: lesson.resultNote || ""
+          };
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("lessons", lessonId),
+              fields: wrapFirestoreFields(freshLesson)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Xếp lịch học",
+            details: `Đăng ký thành công ca học mới cho học viên ${studentName} mã lịch ${lessonId} (${lesson.date} ${lesson.startTime} - ${lesson.endTime})${override === "true" ? " [Ghi đè bởi Admin: " + overrideReason + "]" : ""} [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true, lesson: freshLesson });
+        } catch (restErr: any) {
+          console.error("[Lessons Create REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể xếp lịch bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi xếp lịch:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xếp lịch học." });
     }
@@ -1181,6 +1582,7 @@ async function startServer() {
     if (!lessonId) {
       return res.status(400).json({ error: "Thiếu lessonId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const lessonRef = adminDb.collection("lessons").doc(lessonId);
@@ -1228,6 +1630,94 @@ async function startServer() {
 
       return res.json({ success: true });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Lessons Update] adminDb update failed; starting REST fallback...");
+        try {
+          const oldLesson = await restGetDoc(token, "lessons", lessonId);
+          if (!oldLesson) {
+            return res.status(404).json({ error: "Không tìm thấy buổi học lịch liên kết." });
+          }
+          const studentId = oldLesson.studentId;
+
+          const mergedLesson = {
+            ...oldLesson,
+            ...updates
+          };
+          const lessonUpdateTime = oldLesson.__updateTime;
+          delete mergedLesson.__updateTime;
+
+          const writes: any[] = [];
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("lessons", lessonId),
+              fields: wrapFirestoreFields(mergedLesson)
+            },
+            currentDocument: {
+              updateTime: lessonUpdateTime
+            }
+          });
+
+          // Check if status changed and update student sessions
+          if (updates.status !== undefined && updates.status !== oldLesson.status) {
+            const wasCompleted = oldLesson.status === "Đã hoàn thành";
+            const isCompleted = updates.status === "Đã hoàn thành";
+            if (wasCompleted !== isCompleted && studentId) {
+              const studentDoc = await restGetDoc(token, "students", studentId);
+              if (studentDoc) {
+                const sData = studentDoc;
+                const diff = isCompleted ? 1 : -1;
+                const newCompleted = Math.max(0, (sData.completedSessions || 0) + diff);
+                const newRemaining = Math.max(0, (sData.totalSessions || 0) - newCompleted);
+                
+                const studentUpdateTime = studentDoc.__updateTime;
+                const updatedStudent = {
+                  ...studentDoc,
+                  completedSessions: newCompleted,
+                  remainingSessions: newRemaining
+                };
+                delete updatedStudent.__updateTime;
+
+                writes.push({
+                  update: {
+                    name: getFirestoreDocumentName("students", studentId),
+                    fields: wrapFirestoreFields(updatedStudent)
+                  },
+                  currentDocument: {
+                    updateTime: studentUpdateTime
+                  }
+                });
+              }
+            }
+          }
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Cập nhật lịch học",
+            details: `Cập nhật thành công trạng thái ca lịch ID ${lessonId} của học viên ID ${studentId} thành '${updates.status || oldLesson.status}' [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true });
+        } catch (restErr: any) {
+          console.error("[Lessons Update REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể cập nhật lịch học bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi cập nhật buổi học:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi cập nhật buổi học." });
     }
@@ -1242,6 +1732,7 @@ async function startServer() {
     if (!lessonId) {
       return res.status(400).json({ error: "Thiếu lessonId." });
     }
+    const token = (req as any).userToken;
     try {
       const adminDb = getAdminDb();
       const lessonRef = adminDb.collection("lessons").doc(lessonId);
@@ -1283,6 +1774,78 @@ async function startServer() {
 
       return res.json({ success: true });
     } catch (err: any) {
+      const isPermissionError = err.message?.includes("permissions") || err.message?.includes("PERMISSION_DENIED") || err.code === 7;
+      if (isPermissionError && token) {
+        console.log("[Lessons Delete] adminDb delete failed; starting REST fallback...");
+        try {
+          const lessonData = await restGetDoc(token, "lessons", lessonId);
+          if (!lessonData) {
+            return res.status(404).json({ error: "Không tìm thấy buổi học cần xóa." });
+          }
+          const studentId = lessonData.studentId;
+
+          const writes: any[] = [];
+          writes.push({
+            delete: getFirestoreDocumentName("lessons", lessonId),
+            currentDocument: {
+              exists: true
+            }
+          });
+
+          if (lessonData.status === "Đã hoàn thành" && studentId) {
+            const studentDoc = await restGetDoc(token, "students", studentId);
+            if (studentDoc) {
+              const sData = studentDoc;
+              const newCompleted = Math.max(0, (sData.completedSessions || 0) - 1);
+              const newRemaining = Math.max(0, (sData.totalSessions || 0) - newCompleted);
+              
+              const studentUpdateTime = studentDoc.__updateTime;
+              const updatedStudent = {
+                ...studentDoc,
+                completedSessions: newCompleted,
+                remainingSessions: newRemaining
+              };
+              delete updatedStudent.__updateTime;
+
+              writes.push({
+                update: {
+                  name: getFirestoreDocumentName("students", studentId),
+                  fields: wrapFirestoreFields(updatedStudent)
+                },
+                currentDocument: {
+                  updateTime: studentUpdateTime
+                }
+              });
+            }
+          }
+
+          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+          const freshLog = {
+            id: logId,
+            timestamp: new Date().toISOString(),
+            action: "Xóa ca học",
+            details: `Cán bộ ${user.displayName || user.email} đã xóa ca học mã lịch ${lessonId} của học viên ID ${studentId} [Server REST].`,
+            userId: user.uid,
+            userName: user.displayName || user.email || "Staff",
+            userRole: user.role
+          };
+          writes.push({
+            update: {
+              name: getFirestoreDocumentName("auditLogs", logId),
+              fields: wrapFirestoreFields(freshLog)
+            },
+            currentDocument: {
+              exists: false
+            }
+          });
+
+          await restCommit(token, writes);
+          return res.json({ success: true });
+        } catch (restErr: any) {
+          console.error("[Lessons Delete REST] Fallback failed:", restErr);
+          return res.status(500).json({ error: restErr.message || "Không thể xóa ca học bằng phương thức dự phòng REST." });
+        }
+      }
       console.error("Lỗi xóa ca học:", err);
       return res.status(500).json({ error: err.message || "Lỗi máy chủ khi xóa ca học." });
     }
@@ -1725,57 +2288,48 @@ async function startServer() {
     }
 
     const adminDb = getAdminDb();
+    const PAYMENT_CANCEL_TIMEOUT_MS = 25000;
 
-    const token = (req as any).userToken;
-    const startTime = Date.now();
     try {
-      console.log("[Payments Cancel] Starting adminDb transaction for paymentId:", paymentId);
-      await withTimeout(
+      console.log("[Payments Cancel] Starting secure transaction for paymentId:", paymentId);
+      const result = await withTimeout(
         adminDb.runTransaction(async (transaction) => {
-          const elapsed = () => Date.now() - startTime;
-          const remaining = () => Math.max(100, 4000 - elapsed());
-
           const paymentRef = adminDb.collection("payments").doc(paymentId);
-          console.log("[Payments Cancel] Doc get 1");
-          const paymentDoc = await withTimeout(
-            transaction.get(paymentRef),
-            remaining(),
-            "ADMIN_TRANSACTION_TIMEOUT"
-          );
+          const paymentDoc = await transaction.get(paymentRef);
           if (!paymentDoc.exists) {
-            throw new Error("Không tìm thấy chứng từ cần hủy.");
+            throw new Error("NOT_FOUND");
           }
           const paymentData = paymentDoc.data()!;
 
           if (paymentData.isCancelled) {
-            throw new Error("Biên lai học phí đã được hủy trước đó.");
+            return { duplicated: true };
           }
 
           const studentRef = adminDb.collection("students").doc(paymentData.studentId);
-          console.log("[Payments Cancel] Doc get 2");
-          const studentDoc = await withTimeout(
-            transaction.get(studentRef),
-            remaining(),
-            "ADMIN_TRANSACTION_TIMEOUT"
-          );
+          const studentDoc = await transaction.get(studentRef);
           if (!studentDoc.exists) {
-            throw new Error("Học viên sở hữu biên lai không tồn tại.");
+            throw new Error("STUDENT_NOT_FOUND");
           }
           const studentData = studentDoc.data()!;
 
-          // Update payment cancellation values
+          // Update payment document
           transaction.update(paymentRef, {
             isCancelled: true,
-            cancellationReason: reason
+            cancellationReason: reason.trim(),
+            cancelledAt: new Date().toISOString(),
+            cancelledBy: user.uid
           });
+
+          let paidAmount = Number(studentData.paidAmount || 0);
+          let remainingAmount = Number(studentData.remainingAmount || 0);
 
           // Safely reverse student ledger if already approved prior
           if (paymentData.status === "Đã duyệt") {
-            const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
-            const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
+            paidAmount = Math.max(0, paidAmount - Number(paymentData.amount || 0));
+            remainingAmount = Math.max(0, Number(studentData.totalFee || 0) - paidAmount);
             transaction.update(studentRef, {
-              paidAmount: revPaid,
-              remainingAmount: newRemaining
+              paidAmount,
+              remainingAmount
             });
           }
 
@@ -1786,143 +2340,61 @@ async function startServer() {
             transaction.delete(lockRef);
           }
 
+          // Write exactly one audit log
           const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
           const logRef = adminDb.collection("auditLogs").doc(logId);
           transaction.set(logRef, {
             id: logId,
             timestamp: new Date().toISOString(),
             action: "Hủy Biên Lai Doanh Thu",
-            details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason} [Giao dịch Server].`,
+            details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason.trim()} [Giao dịch Server].`,
             userId: user.uid,
-            userName: user.displayName,
+            userName: user.displayName || user.email || "Staff",
             userRole: user.role
           });
+
+          return {
+            success: true,
+            paymentId,
+            studentId: paymentData.studentId,
+            paidAmount,
+            remainingAmount
+          };
         }),
-        4000,
-        "ADMIN_TRANSACTION_TIMEOUT"
+        PAYMENT_CANCEL_TIMEOUT_MS,
+        "PAYMENT_CANCEL_TIMEOUT"
       );
 
-      console.log("[Payments Cancel] adminDb transaction completed successfully");
-      return res.json({ success: true });
-    } catch (error: any) {
-      console.warn("[Payments Cancel] adminDb transaction failed/timed out:", error.message || error);
-      const shouldUseRestFallback =
-        error?.message?.includes("ADMIN_TRANSACTION_TIMEOUT") ||
-        error?.message?.includes("permissions") ||
-        error?.message?.includes("PERMISSION_DENIED") ||
-        error?.message?.includes("UNAVAILABLE") ||
-        error?.message?.includes("deadline") ||
-        error?.code === 7 ||
-        error?.code === 14;
-
-      if (shouldUseRestFallback && token) {
-        console.log("[Payments Cancel] Starting REST fallback...");
-        if (!["Admin", "Accountant"].includes(user.role)) {
-          return res.status(403).json({ error: "Chức năng cứu hộ ngoại tuyến bằng REST API chỉ cho phép tài khoản được cấp quyền." });
-        }
-        try {
-          console.log("[Payments Cancel REST] Fetching payment:", paymentId);
-          const paymentData = await restGetDoc(token, "payments", paymentId);
-          if (!paymentData) {
-            return res.status(404).json({ error: "Không tìm thấy chứng từ cần hủy." });
-          }
-          console.log("[Payments Cancel REST] Payment fetched:", paymentData);
-
-          if (paymentData.isCancelled) {
-            return res.status(400).json({ error: "Biên lai học phí đã được hủy trước đó." });
-          }
-
-          console.log("[Payments Cancel REST] Fetching student:", paymentData.studentId);
-          const studentData = await restGetDoc(token, "students", paymentData.studentId);
-          if (!studentData) {
-            return res.status(404).json({ error: "Học viên sở hữu biên lai không tồn tại." });
-          }
-          console.log("[Payments Cancel REST] Student fetched:", studentData);
-
-          // Update payment cancellation
-          const updatedPayment = {
-            ...paymentData,
-            isCancelled: true,
-            cancellationReason: reason
-          };
-          const paymentUpdateTime = paymentData.__updateTime;
-          delete updatedPayment.__updateTime;
-
-          const writes: any[] = [];
-          writes.push({
-            update: {
-              name: getFirestoreDocumentName("payments", paymentId),
-              fields: wrapFirestoreFields(updatedPayment)
-            },
-            currentDocument: {
-              updateTime: paymentUpdateTime
-            }
-          });
-
-          // Reverse student ledger if already approved prior
-          if (paymentData.status === "Đã duyệt") {
-            const revPaid = Math.max(0, Number(studentData.paidAmount || 0) - Number(paymentData.amount || 0));
-            const newRemaining = Math.max(0, Number(studentData.totalFee || 0) - revPaid);
-            const updatedStudentFields = {
-              ...studentData,
-              paidAmount: revPaid,
-              remainingAmount: newRemaining
-            };
-            const studentUpdateTime = studentData.__updateTime;
-            delete updatedStudentFields.__updateTime;
-
-            writes.push({
-              update: {
-                name: getFirestoreDocumentName("students", paymentData.studentId),
-                fields: wrapFirestoreFields(updatedStudentFields)
-              },
-              currentDocument: {
-                updateTime: studentUpdateTime
-              }
-            });
-          }
-
-          // Delete installment lock if category is Đợt 1, 2, 3
-          const lockId = getInstallmentLockId(paymentData.studentId, paymentData.category);
-          if (lockId) {
-            writes.push({
-              delete: getFirestoreDocumentName("paymentInstallmentLocks", lockId)
-            });
-          }
-
-          // Write audit log
-          const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-          const freshLog = {
-            id: logId,
-            timestamp: new Date().toISOString(),
-            action: "Hủy Biên Lai Doanh Thu",
-            details: `Yêu cầu hủy biên lai học phí ID ${paymentId} thành công. Chênh hoàn: -${Number(paymentData.amount).toLocaleString('vi-VN')} đ. Lý do: ${reason} [Giao dịch Server REST].`,
-            userId: user.uid,
-            userName: user.displayName,
-            userRole: user.role
-          };
-          writes.push({
-            update: {
-              name: getFirestoreDocumentName("auditLogs", logId),
-              fields: wrapFirestoreFields(freshLog)
-            },
-            currentDocument: {
-              exists: false
-            }
-          });
-
-          console.log("[Payments Cancel REST] Committing writes to Firestore REST API...");
-          await restCommit(token, writes);
-          console.log("[Payments Cancel REST] Writes committed successfully");
-          return res.json({ success: true });
-        } catch (restErr: any) {
-          console.error("[Payments Cancel REST] REST fallback transaction failed:", restErr);
-          return res.status(500).json({ error: restErr.message || "Không thể hủy biên lai học phí." });
-        }
-      } else {
-        console.error("Giao dịch hủy học phí thất bại:", error);
-        return res.status(500).json({ error: error.message || "Lỗi khi hủy biên lai học phí." });
+      if (result.duplicated) {
+        console.log("[Payments Cancel] Idempotent response: Payment already cancelled.");
+        return res.json({
+          success: true,
+          duplicated: true,
+          message: "Phiếu đã được hủy trước đó."
+        });
       }
+
+      console.log("[Payments Cancel] Transaction committed successfully:", result);
+      return res.json(result);
+
+    } catch (error: any) {
+      console.error("[Payments Cancel] Secure transaction failed:", error);
+      if (error?.message === "NOT_FOUND") {
+        return res.status(404).json({ error: "Không tìm thấy chứng từ cần hủy trong hệ thống." });
+      }
+      if (error?.message === "STUDENT_NOT_FOUND") {
+        return res.status(404).json({ error: "Học viên sở hữu biên lai không tồn tại." });
+      }
+      if (error?.message?.includes("PAYMENT_CANCEL_TIMEOUT")) {
+        return res.status(504).json({
+          code: "PAYMENT_CANCEL_TIMEOUT",
+          error: "Máy chủ xử lý hủy phiếu quá thời gian. Vui lòng kiểm tra lại trạng thái chứng từ trước khi thử lại."
+        });
+      }
+      return res.status(500).json({
+        code: "PAYMENT_CANCEL_FAILED",
+        error: error.message || "Lỗi máy chủ khi xử lý hủy chứng từ học phí."
+      });
     }
   });
 

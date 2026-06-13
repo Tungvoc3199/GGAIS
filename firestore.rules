@@ -175,8 +175,7 @@ service cloud.firestore {
     // 2. Students Collection
     match /students/{studentId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update: if (isAdmin() || isStaff() || isAccountant()) && isValidId(studentId) && isValidStudent(incoming());
-      allow delete: if isAdmin() && isValidId(studentId);
+      allow create, update, delete: if false;
     }
 
     // 3. Instructors Collection
@@ -196,15 +195,13 @@ service cloud.firestore {
     // 5. Lessons Collection
     match /lessons/{lessonId} {
       allow read: if isAdmin() || isStaff() || isInstructor() || isAccountant();
-      allow create, update: if (isAdmin() || isStaff()) && isValidId(lessonId) && isValidLesson(incoming());
-      allow delete: if (isAdmin() || isStaff()) && isValidId(lessonId);
+      allow create, update, delete: if false;
     }
 
     // 6. Payments Collection (Ledger Hardening - ONLY Admin, Staff, Accountant authorized)
     match /payments/{paymentId} {
       allow read: if isAdmin() || isStaff() || isAccountant();
-      allow create, update: if (isAdmin() || isStaff() || isAccountant()) && isValidId(paymentId) && isValidPayment(incoming());
-      allow delete: if isAdmin() && isValidId(paymentId);
+      allow create, update, delete: if false;
     }
 
     // 7. Availability Overrides
@@ -224,7 +221,7 @@ service cloud.firestore {
     // 9. Audit Logs (Append-Only)
     match /auditLogs/{logId} {
       allow read: if isAdmin();
-      allow create: if isSignedIn() && isValidId(logId) && isValidAuditLog(incoming());
+      allow create, update, delete: if false;
     }
 
     // 10. Global App Settings
@@ -238,7 +235,7 @@ service cloud.firestore {
     // 11. Payment Installment Locks
     match /paymentInstallmentLocks/{lockId} {
       allow read: if isAdmin() || isStaff() || isAccountant();
-      allow create, update, delete: if (isAdmin() || isStaff() || isAccountant()) && isValidId(lockId);
+      allow create, update, delete: if false;
     }
   }
 }

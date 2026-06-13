@@ -43,6 +43,7 @@ interface StudentsProps {
   onClearGlobalSelectedStudentId?: () => void;
 }
 
+const OCR_API_TIMEOUT_MS = 60000;
 const AVAILABLE_TAGS = ['Đang ôn thi', 'Mới nhập môn', 'Cần phụ đạo', 'Yếu lý thuyết', 'Lái yếu'];
 
 export const Students: React.FC<StudentsProps> = ({
@@ -229,30 +230,30 @@ export const Students: React.FC<StudentsProps> = ({
   const courseDefaultsByLicense = {
     A1: {
       courseType: 'Trọn gói hạng A1',
-      totalFee: 0,
+      totalFee: settings?.tuitionPrices?.A1 ?? 0,
       totalSessions: 2
     },
     A: {
       courseType: 'Trọn gói hạng A',
-      totalFee: 0,
+      totalFee: settings?.tuitionPrices?.A ?? 0,
       totalSessions: 2
     },
     'B số tự động': {
       courseType: 'Trọn gói hạng B số tự động',
-      totalFee: 12500000,
+      totalFee: settings?.tuitionPrices?.['B số tự động'] ?? 15000000,
       totalSessions: 14
     },
     'B số sàn': {
       courseType: 'Trọn gói hạng B số sàn',
-      totalFee: 11000000,
+      totalFee: settings?.tuitionPrices?.['B số sàn'] ?? 13000000,
       totalSessions: 20
     },
     C1: {
       courseType: 'Trọn gói hạng C1',
-      totalFee: 13500000,
+      totalFee: settings?.tuitionPrices?.C1 ?? 16000000,
       totalSessions: 16
     }
-  } as const;
+  };
 
   // New Student State
   const [isAdding, setIsAdding] = useState(false);
@@ -270,14 +271,14 @@ export const Students: React.FC<StudentsProps> = ({
   }, [quickFormOpen, quickFormType, onCloseQuickForm]);
   const [newName, setNewName] = useState('');
   const [newPhone, setNewPhone] = useState('');
-  const [newDob, setNewDob] = useState('1998-01-01');
+  const [newDob, setNewDob] = useState('2000-01-01');
   const [newAddress, setNewAddress] = useState('');
   const [newLicenseClass, setNewLicenseClass] = useState<'A1' | 'A' | 'B số tự động' | 'B số sàn' | 'C1'>('B số tự động');
   const [newCourseType, setNewCourseType] = useState('Trọn gói hạng B số tự động');
   const [newTotalFee, setNewTotalFee] = useState(15000000);
   const [newTotalSessions, setNewTotalSessions] = useState(14);
-  const [newInstructorId, setNewInstructorId] = useState('inst_2');
-  const [newVehicleId, setNewVehicleId] = useState('veh_1');
+  const [newInstructorId, setNewInstructorId] = useState('');
+  const [newVehicleId, setNewVehicleId] = useState('');
   const [newNotes, setNewNotes] = useState('');
   const [newTags, setNewTags] = useState<string[]>([]);
 
@@ -478,7 +479,7 @@ export const Students: React.FC<StudentsProps> = ({
           const result = await authFetch('/api/ocr-card', {
             method: 'POST',
             body: JSON.stringify({ image: base64Str, cardType: typeLabel }),
-          });
+          }, OCR_API_TIMEOUT_MS);
           if (result.success && result.data) {
             const { fullName, address, dob } = result.data;
             if (fullName) {
@@ -520,7 +521,7 @@ export const Students: React.FC<StudentsProps> = ({
     }
 
     // Phone format check
-    const vnPhoneRegex = /(03|05|07|08|09|01[2|6|8|9])+([0-9]{8})\b/;
+    const vnPhoneRegex = /^(03|05|07|08|09)\d{8}$/;
     if (!vnPhoneRegex.test(newPhone)) {
       alert('Số điện thoại không hợp lệ. Vui lòng nhập định dạng số điện thoại Việt Nam (e.g. 0912345678).');
       return;
@@ -534,38 +535,10 @@ export const Students: React.FC<StudentsProps> = ({
     setIsCreatingStudent(true);
     try {
       const studentId = `stud_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      let finalAvatarImage = isFirebase ? '' : avatarImage;
-      let finalCccdPath = '';
-      let finalEidPath = '';
-      const uploadedPaths: string[] = [];
 
-      if (isFirebase) {
-        try {
-          if (cccdFile) {
-            const res = await uploadStudentDocument(studentId, 'cccd', cccdFile);
-            finalCccdPath = res.storagePath;
-            if (res.storagePath) uploadedPaths.push(res.storagePath);
-          }
-          if (eidFile) {
-            const res = await uploadStudentDocument(studentId, 'eid', eidFile);
-            finalEidPath = res.storagePath;
-            if (res.storagePath) uploadedPaths.push(res.storagePath);
-          }
-          if (avatarFile) {
-            const res = await uploadStudentDocument(studentId, 'avatar', avatarFile);
-            finalAvatarImage = res.downloadUrl || '';
-            if (res.storagePath) uploadedPaths.push(res.storagePath);
-          }
-        } catch (uploadErr: any) {
-          console.error('Lỗi tải file lên Firebase Storage:', uploadErr);
-          alert(`Tải tài liệu học viên lên Cloud thất bại: ${uploadErr.message || String(uploadErr)}. Vui lòng thử lại.`);
-          setIsCreatingStudent(false);
-          return;
-        }
-      }
-
+      let createdStudentObj: any = null;
       try {
-        await addStudent({
+        createdStudentObj = await addStudent({
           id: studentId,
           name: newName.trim(),
           phone: newPhone.trim(),
@@ -584,28 +557,77 @@ export const Students: React.FC<StudentsProps> = ({
           reminderStatus: 'Chưa nhắc',
           tags: newTags,
           cccdImage: isFirebase ? '' : cccdImage,
-          avatarImage: finalAvatarImage,
+          avatarImage: isFirebase ? '' : avatarImage,
           eidImage: isFirebase ? '' : eidImage,
-          cccdStoragePath: finalCccdPath,
-          eidStoragePath: finalEidPath,
+          cccdStoragePath: '',
+          eidStoragePath: '',
           theoryCompleted: false,
           simulationCompleted: false
         });
       } catch (addErr: any) {
-        console.error('Lỗi thêm học viên, tiến hành dọn dẹp file mồ côi:', addErr);
-        if (isFirebase && uploadedPaths.length > 0) {
-          for (const path of uploadedPaths) {
-            try {
-              await deleteObject(ref(storage, path));
-              console.log(`Đã dọn dẹp thành công file rác: ${path}`);
-            } catch (delErr) {
-              console.warn(`Lỗi khi dọn dẹp file rác ${path}:`, delErr);
-            }
-          }
-        }
+        console.error('Lỗi thêm học viên:', addErr);
         alert(`Đăng ký học viên thất bại: ${addErr.message || String(addErr)}`);
         setIsCreatingStudent(false);
         return;
+      }
+
+      const realStudentId = createdStudentObj?.id || studentId;
+      let finalAvatarImage = isFirebase ? '' : avatarImage;
+      let finalCccdPath = '';
+      let finalEidPath = '';
+      const uploadedPaths: string[] = [];
+
+      if (isFirebase) {
+        try {
+          if (cccdFile) {
+            const res = await uploadStudentDocument(realStudentId, 'cccd', cccdFile);
+            finalCccdPath = res.storagePath;
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
+          }
+          if (eidFile) {
+            const res = await uploadStudentDocument(realStudentId, 'eid', eidFile);
+            finalEidPath = res.storagePath;
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
+          }
+          if (avatarFile) {
+            const res = await uploadStudentDocument(realStudentId, 'avatar', avatarFile);
+            finalAvatarImage = res.downloadUrl || '';
+            if (res.storagePath) uploadedPaths.push(res.storagePath);
+          }
+
+          // Sau khi upload thành công toàn bộ, cập nhật lại học viên với đường dẫn/avatar URL bằng API updateStudent
+          if (uploadedPaths.length > 0) {
+            const updateRes = await updateStudent(realStudentId, {
+              avatarImage: finalAvatarImage,
+              cccdStoragePath: finalCccdPath,
+              eidStoragePath: finalEidPath
+            });
+            if (!updateRes.success) {
+              throw new Error(updateRes.error || 'Cập nhật tài liệu học viên thất bại.');
+            }
+          }
+        } catch (uploadErr: any) {
+          console.error('Lỗi xử lý file hoặc cập nhật, tiến hành dọn dẹp file mồ côi:', uploadErr);
+          if (uploadedPaths.length > 0) {
+            for (const path of uploadedPaths) {
+              try {
+                await deleteObject(ref(storage, path));
+                console.log(`Đã dọn dẹp file mồ côi thành công: ${path}`);
+              } catch (delErr) {
+                console.warn(`Lỗi dọn dẹp file mồ côi ${path}:`, delErr);
+              }
+            }
+          }
+          // Xóa học viên đã tạo rỗng thông tin đính kèm
+          try {
+            await deleteStudent(realStudentId);
+          } catch (delStudErr) {
+            console.error('Lỗi xóa học viên sau khi tải file thất bại:', delStudErr);
+          }
+          alert(`Đăng ký học viên thất bại do xử lý tài liệu đính kèm lỗi: ${uploadErr.message || String(uploadErr)}.`);
+          setIsCreatingStudent(false);
+          return;
+        }
       }
 
       alert('Đăng ký tuyển sinh học viên thành công!');

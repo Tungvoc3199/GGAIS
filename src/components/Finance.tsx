@@ -48,6 +48,7 @@ export const Finance: React.FC = () => {
   const [cancellingPayId, setCancellingPayId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState('');
   const [isCancellingPayment, setIsCancellingPayment] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
   const [approvingPaymentId, setApprovingPaymentId] = useState<string | null>(null);
 
   const isApprovedActivePayment = (p: Payment) =>
@@ -175,18 +176,21 @@ export const Finance: React.FC = () => {
     }
     setCancellingPayId(payId);
     setCancelReason('');
+    setCancelError(null);
   };
 
   const handleConfirmCancel = async () => {
     if (!cancellingPayId || !cancelReason.trim() || isCancellingPayment) return;
+    setCancelError(null);
     try {
       setIsCancellingPayment(true);
-      await cancelPayment(cancellingPayId, cancelReason.trim());
+      const res = await cancelPayment(cancellingPayId, cancelReason.trim());
       setCancellingPayId(null);
       setCancelReason("");
-      alert("Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.");
+      alert(res?.message || "Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.");
     } catch (error: any) {
-      alert(`Hủy phiếu thất bại: ${error?.message || String(error)}`);
+      console.error("Lỗi khi hủy phiếu:", error);
+      setCancelError(error?.message || "Hủy phiếu thất bại.");
     } finally {
       setIsCancellingPayment(false);
     }
@@ -626,8 +630,9 @@ export const Finance: React.FC = () => {
                 <AlertTriangle className="h-4.5 w-4.5" /> QUY TRÌNH HỦY KHÓA CHỨNG TỪ
               </span>
               <button
-                onClick={() => setCancellingPayId(null)}
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+                onClick={() => !isCancellingPayment && setCancellingPayId(null)}
+                disabled={isCancellingPayment}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer disabled:opacity-50"
               >
                 <X className="h-5 w-5" />
               </button>
@@ -637,15 +642,22 @@ export const Finance: React.FC = () => {
               Nhập lý do thu thập để hủy phiếu thu này. Thao tác hoàn tính, tự động khôi phục số dư nợ cũ của học viên tương ứng.
             </p>
 
+            {cancelError && (
+              <div className="bg-red-50 border border-red-200 text-red-650 p-3 rounded-xl text-xs font-bold leading-relaxed">
+                {cancelError}
+              </div>
+            )}
+
             <div className="space-y-1 text-xs">
               <label className="block text-slate-700 font-bold mb-1">Lý do hủy chứng từ *</label>
               <input
                 type="text"
                 required
+                disabled={isCancellingPayment}
                 placeholder="e.g. Chuyển nhầm tiền đặt cọc, Đổi hạng sang khóa B tự động..."
                 value={cancelReason}
                 onChange={(e) => setCancelReason(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-slate-800 text-xs font-bold"
+                className="w-full bg-slate-50 border border-slate-200 py-2 px-3 rounded-lg text-slate-800 text-xs font-bold disabled:opacity-60"
               />
             </div>
 
@@ -653,14 +665,14 @@ export const Finance: React.FC = () => {
               <button
                 onClick={() => setCancellingPayId(null)}
                 disabled={isCancellingPayment}
-                className="bg-slate-100 text-slate-755 hover:bg-slate-200 px-3.5 py-2 rounded-xl cursor-pointer disabled:opacity-55"
+                className="bg-slate-100 text-slate-755 hover:bg-slate-200 px-3.5 py-2 rounded-xl cursor-pointer disabled:opacity-50"
               >
                 Trở về
               </button>
               <button
                 onClick={handleConfirmCancel}
                 disabled={isCancellingPayment}
-                className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl cursor-pointer shadow-xs"
+                className="bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white px-4 py-2 rounded-xl cursor-pointer shadow-xs font-bold"
               >
                 {isCancellingPayment ? 'Đang hủy phiếu...' : '✓ Đồng ý Hủy Phiếu'}
               </button>

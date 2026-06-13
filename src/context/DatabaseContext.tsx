@@ -84,7 +84,7 @@ interface DatabaseContextType {
   logout: () => void;
   toggleDatabaseMode: (preferLocal: boolean) => void;
   // Student Actions
-  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'> & { id?: string }) => Promise<void>;
+  addStudent: (student: Omit<Student, 'id' | 'code' | 'paidAmount' | 'remainingAmount'> & { id?: string }) => Promise<any>;
   updateStudent: (id: string, updated: Partial<Student>) => Promise<{ success: boolean; error?: string }>;
   deleteStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
   archiveStudent: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -95,7 +95,7 @@ interface DatabaseContextType {
   deleteLesson: (id: string) => Promise<{ success: boolean; error?: string }>;
   // Payment Actions
   addPayment: (payment: Omit<Payment, 'id' | 'isCancelled' | 'createdAt' | 'createdBy'>) => Promise<{ success: boolean; error?: string }>;
-  cancelPayment: (id: string, reason: string) => Promise<void>;
+  cancelPayment: (id: string, reason: string) => Promise<{ success: boolean; duplicated?: boolean; message?: string }>;
   approvePayment: (id: string) => Promise<void>;
   reconcileStudentPayments: (studentId: string) => Promise<{ success: boolean; paidAmount?: number; remainingAmount?: number; error?: string }>;
   batchConfirmLessons: (lessonsToSave: Omit<Lesson, 'id'>[], overrideReason?: string) => Promise<{ success: boolean; committedCount?: number; hasConflicts?: boolean; conflicts?: any[]; message?: string }>;
@@ -472,14 +472,18 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       userRole: currentUser?.role || 'Staff'
     };
 
-    setAuditLogs(prev => [newLog, ...prev]);
-
     if (isFirebase) {
       try {
-        await saveAuditLogDoc(newLog);
+        await authFetch('/api/audit-logs/create', {
+          method: 'POST',
+          body: JSON.stringify({ action, details })
+        });
+        setAuditLogs(prev => [newLog, ...prev]);
       } catch (err) {
         console.error('Lỗi khi ghi nhật ký Firestore:', err);
       }
+    } else {
+      setAuditLogs(prev => [newLog, ...prev]);
     }
   };
 
@@ -682,14 +686,17 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const id = newS.id || generateUniqueId('stud');
     const { id: _, ...restOfS } = newS;
 
+    let createdStudent: any = null;
+
     if (isFirebase) {
       try {
         const payload = { id, ...newS };
-        await authFetch('/api/students/create', {
+        const res = await authFetch('/api/students/create', {
           method: 'POST',
           body: JSON.stringify(payload)
         });
         await loadFirestoreData();
+        createdStudent = res?.student || { ...payload, code };
       } catch (err: any) {
         console.error('Lỗi khi đăng ký học viên (Backend API):', err);
         throw err;
@@ -715,9 +722,14 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
 
       setStudents(prev => [freshStudent, ...prev]);
+      createdStudent = freshStudent;
     }
 
-    await addAuditLog('Thêm học viên mới', `Đăng ký thành công học viên: ${newS.name} (${code}) khóa học ${newS.courseType}.`);
+    if (!isFirebase) {
+      await addAuditLog('Thêm học viên mới', `Đăng ký thành công học viên: ${newS.name} (${code}) khóa học ${newS.courseType}.`);
+    }
+
+    return createdStudent;
   };
 
   const updateStudent = async (id: string, updated: Partial<Student>): Promise<{ success: boolean; error?: string }> => {
@@ -771,7 +783,9 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       return s;
     }));
 
-    await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${mergedStudent.name}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    if (!isFirebase) {
+      await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${mergedStudent.name}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    }
     return { success: true };
   };
 
@@ -1141,7 +1155,7 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
-  const cancelPayment = async (id: string, reason: string) => {
+  const cancelPayment = async (id: string, reason: string): Promise<{ success: boolean; duplicated?: boolean; message?: string }> => {
     if (currentUser?.role === "Staff") {
       throw new Error("Giáo vụ tuyển sinh không được phép hủy chứng từ doanh thu.");
     }
@@ -1152,18 +1166,24 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (isFirebase) {
       setDataLoading(true);
       try {
-        const result = await authFetch("/api/payments/cancel", {
-          method: "POST",
-          body: JSON.stringify({
-            paymentId: id,
-            reason: reason.trim()
-          })
-        });
-        if (!result?.success) {
-          throw new Error(result?.error || "Máy chủ chưa xác nhận hủy phiếu.");
-        }
+        const PAYMENT_CANCEL_CLIENT_TIMEOUT_MS = 35000;
+        const result = await authFetch(
+          "/api/payments/cancel",
+          {
+            method: "POST",
+            body: JSON.stringify({
+              paymentId: id,
+              reason: reason.trim()
+            })
+          },
+          PAYMENT_CANCEL_CLIENT_TIMEOUT_MS
+        );
         await loadFirestoreData();
-        return { success: true };
+        return {
+          success: true,
+          duplicated: result?.duplicated || false,
+          message: result?.message || "Hủy biên lai học phí thành công."
+        };
       } finally {
         setDataLoading(false);
       }

@@ -33,10 +33,18 @@ function makeRequest(url, method = 'GET', headers = {}, body = null) {
       let data = '';
       res.on('data', (chunk) => { data += chunk; });
       res.on('end', () => {
+        let parsed = data;
+        if (data) {
+          try {
+            parsed = JSON.parse(data);
+          } catch (e) {
+            parsed = data;
+          }
+        }
         resolve({
           statusCode: res.statusCode,
           headers: res.headers,
-          data: data ? JSON.parse(data).catch(() => data) : data
+          data: parsed
         });
       });
     });

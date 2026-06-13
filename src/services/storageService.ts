@@ -51,7 +51,7 @@ export async function uploadStudentDocument(
   const safeName = sanitizeFileName(file.name || `${kind}.jpg`);
   const fileRef = ref(
     storage,
-    `students/${studentId}/${kind}/${Date.now()}_${safeName}`
+    `students/${studentId}/${kind}_${safeName}`
   );
   await uploadBytes(fileRef, file, {
     contentType: contentType

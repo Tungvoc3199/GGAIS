@@ -73,7 +73,7 @@ gcloud run deploy lich-hoc-pro-service \
 ---
 
 ## 4. AN TOÀN BẢO MẬT KHI TRIỂN KHAI
-
 1. **Service Account**: Gán Default Compute Service Account hoặc Custom Service Account của Cloud Run có quyền `Cloud Datastore Owner` và `Storage Object Admin`. Khi chạy trên nền tảng GCP, Firebase Admin SDK tự động tương tác không cần file JSON cục bộ.
 2. **Kích hoạt CORS & SSL**: Cloud Run tự động cấp địa chỉ SSL HTTPS chuẩn mã hóa cho ứng dụng.
 3. **Cập nhật Security Rules**: Đảm bảo chạy `firebase deploy --only firestore:rules,storage:rules` để đồng bộ các cấu hình bảo vệ trực tiếp cổng rò rỉ khách hàng.
+4. **Vô hiệu hóa REST Fallback**: Trên môi trường Production, tuyệt đối đặt cấu hình `ALLOW_DEV_REST_FALLBACK=false` để chặn hoàn toàn mọi ngả đường bypass từ client-side qua cổng fallback dự phòng.

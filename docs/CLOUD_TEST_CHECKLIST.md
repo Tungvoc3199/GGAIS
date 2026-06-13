@@ -15,9 +15,8 @@ NODE_ENV=production
 FIREBASE_PROJECT_ID=lich-hoc-pro-XXXX
 # Cho phép tự động định vị credentials trong runtime của Google Cloud (Cloud Run / GAE)
 
-# Cấu hình an toàn ghi REST Fallback (Phòng ngừa lỗi mất mạng ngoại vi)
-ALLOW_REST_WRITE_FALLBACK=true
-REST_FALLBACK_SECRET_KEY=secure-fallback-handshake-token-xyz123
+# Cấu hình an toàn ghi REST Fallback (Chế độ phát triển)
+ALLOW_DEV_REST_FALLBACK=false
 ```
 
 ---

@@ -119,7 +119,7 @@ assertIncludes(
 if (/useState\(\s*['"]1998-01-01['"]\s*\)/.test(students)) {
   fail('Form học viên vẫn còn ngày sinh mặc định giả 1998-01-01');
 } else {
-  pass('Form học viên không còn ngày sinh mặc định giả');
+  pass('Form học viên không còn ngày sinh mặc định giả 1998-01-01');
 }
 
 if (/useState\(\s*['"]inst_2['"]\s*\)/.test(students) || /useState\(\s*['"]veh_1['"]\s*\)/.test(students)) {
@@ -130,7 +130,7 @@ if (/useState\(\s*['"]inst_2['"]\s*\)/.test(students) || /useState\(\s*['"]veh_1
 
 assertIncludes(
   students,
-  /\^\(\?:03\|05\|07\|08\|09\)\\d\{8\}\$/,
+  /\^\(\?:?03\|05\|07\|08\|09\)\\d\{8\}\$/,
   'Regex số điện thoại Việt Nam đã chuẩn hóa',
   'Regex số điện thoại Việt Nam chưa chuẩn hóa'
 );

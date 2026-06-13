@@ -33,8 +33,8 @@ function readRequired(filePath) {
 
 /**
  * Extract a Firestore match block by balancing braces.
- * Important: the path itself contains placeholders such as {studentId},
- * so searching for the first closing brace is incorrect.
+ * The path contains placeholders such as {studentId}; therefore the body
+ * opening brace must be taken from the end of the matched declaration.
  */
 function extractBalancedMatchBlock(source, matchPattern, label) {
   const match = source.match(matchPattern);
@@ -44,8 +44,8 @@ function extractBalancedMatchBlock(source, matchPattern, label) {
   }
 
   const start = match.index;
-  const openingBrace = source.indexOf('{', start + match[0].length);
-  if (openingBrace === -1) {
+  const openingBrace = start + match[0].lastIndexOf('{');
+  if (openingBrace < start) {
     fail(`Block match ${label} không có dấu mở ngoặc`);
     return '';
   }
@@ -130,7 +130,7 @@ if (/useState\(\s*['"]inst_2['"]\s*\)/.test(students) || /useState\(\s*['"]veh_1
 
 assertIncludes(
   students,
-  /\^\(\?:?03\|05\|07\|08\|09\)\\d\{8\}\$/,
+  /\^\((?:\?:)?03\|05\|07\|08\|09\)\\d\{8\}\$/,
   'Regex số điện thoại Việt Nam đã chuẩn hóa',
   'Regex số điện thoại Việt Nam chưa chuẩn hóa'
 );

@@ -189,8 +189,13 @@ export const Finance: React.FC = () => {
       setCancelReason("");
       alert(res?.message || "Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.");
     } catch (error: any) {
-      console.error("Lỗi khi hủy phiếu:", error);
-      setCancelError(error?.message || "Hủy phiếu thất bại.");
+      console.error("Lỗi khi hủy phiếu - full object:", error);
+      const msg = error?.message
+        || error?.error
+        || (typeof error === "string" ? error : null)
+        || JSON.stringify(error)
+        || "Lỗi không xác định khi hủy phiếu (xem console).";
+      setCancelError(msg);
     } finally {
       setIsCancellingPayment(false);
     }

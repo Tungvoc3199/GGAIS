@@ -346,10 +346,13 @@ const INSTALLMENT_KEY_BY_CATEGORY = {
 } as const;
 
 function getInstallmentLockId(studentId: string, category: string): string | null {
-  const key = INSTALLMENT_KEY_BY_CATEGORY[
-    category as keyof typeof INSTALLMENT_KEY_BY_CATEGORY
-  ];
-  return key ? `${studentId}_${key}` : null;
+  const normCategory = (category || "").trim().normalize("NFC");
+  for (const [key, value] of Object.entries(INSTALLMENT_KEY_BY_CATEGORY)) {
+    if (key.trim().normalize("NFC") === normCategory) {
+      return `${studentId}_${value}`;
+    }
+  }
+  return null;
 }
 
 async function restSetDoc(token: string, collection: string, docId: string, data: any): Promise<void> {
@@ -718,6 +721,63 @@ async function startServer() {
       firebaseAdminInitialized: admin.apps.length > 0,
       geminiConfigured: !!process.env.GEMINI_API_KEY
     });
+  });
+
+  app.get("/api/debug/duplicate-payments", checkAuth, async (req, res) => {
+    const user = req.currentUserProfile;
+    if (user.role !== "Admin") {
+      return res.status(403).json({ error: "Quyền truy cập bị từ chối: Chỉ Admin mới được phép truy cập." });
+    }
+
+    try {
+      const adminDb = getAdminDb();
+      const paymentsSnapshot = await adminDb.collection("payments").get();
+      
+      const paymentsMap: Record<string, any[]> = {};
+      const duplicates: any[] = [];
+
+      paymentsSnapshot.forEach(doc => {
+        const id = doc.id;
+        const data = doc.data();
+        if (!data.isCancelled && data.status === "Đã duyệt") {
+          const studentId = data.studentId;
+          const category = (data.category || "").trim().normalize("NFC");
+          const key = `${studentId}_${category}`;
+          if (!paymentsMap[key]) {
+            paymentsMap[key] = [];
+          }
+          paymentsMap[key].push({ id, ...data });
+        }
+      });
+
+      for (const [key, list] of Object.entries(paymentsMap)) {
+        if (list.length > 1) {
+          const parts = key.split("_");
+          const stId = parts[0];
+          const catName = parts.slice(1).join("_");
+          duplicates.push({
+            studentId: stId,
+            category: catName,
+            count: list.length,
+            payments: list.map(p => ({
+              id: p.id,
+              amount: p.amount,
+              receiver: p.receiver,
+              createdAt: p.createdAt
+            }))
+          });
+        }
+      }
+
+      return res.json({
+        success: true,
+        duplicatesCount: duplicates.length,
+        duplicates
+      });
+    } catch (error: any) {
+      console.error("[Debug Duplicates] Error finding duplicate payments:", error);
+      return res.status(500).json({ error: error.message || "Lỗi máy chủ khi quét biên lai trùng." });
+    }
   });
 
   app.get("/api/students/:studentId/document-url", checkAuth, async (req, res) => {
@@ -1920,7 +1980,8 @@ async function startServer() {
     const safeRequestId = requestId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
     const payId = `pay_${safeRequestId}`;
     const isStaff = user.role === "Staff";
-    const shouldApproveImmediately = !isStaff && (user.role === "Admin" || user.role === "Accountant" || (category !== "Thanh toán bổ sung" && category !== "Khác"));
+    const normCategory = (category || "").trim().normalize("NFC");
+    const shouldApproveImmediately = !isStaff && (user.role === "Admin" || user.role === "Accountant" || (normCategory !== "Thanh toán bổ sung".normalize("NFC") && normCategory !== "Khác".normalize("NFC")));
     const freshPayment = {
       id: payId,
       studentId,
@@ -2295,6 +2356,9 @@ async function startServer() {
   // 4. Cancels payments securely, reversing balances on student document in transaction
   app.post("/api/payments/cancel", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
+    console.log("[Payments Cancel] Incoming request body:", JSON.stringify(req.body));
+    console.log("[Payments Cancel] Caller user:", user?.uid, user?.role, user?.email);
+
     if (user.role !== "Admin") {
       return res.status(403).json({
         error: "Quyền truy cập bị từ chối: Chỉ Admin mới được phép hủy chứng từ doanh thu."
@@ -2322,6 +2386,10 @@ async function startServer() {
 
           if (paymentData.isCancelled) {
             return { duplicated: true };
+          }
+
+          if (!paymentData.studentId) {
+            throw new Error("PAYMENT_MISSING_STUDENT_ID");
           }
 
           const studentRef = adminDb.collection("students").doc(paymentData.studentId);
@@ -2398,11 +2466,15 @@ async function startServer() {
 
     } catch (error: any) {
       console.error("[Payments Cancel] Secure transaction failed:", error);
+      console.error("[Payments Cancel] FULL ERROR STACK:", error?.stack || error);
       if (error?.message === "NOT_FOUND") {
         return res.status(404).json({ error: "Không tìm thấy chứng từ cần hủy trong hệ thống." });
       }
       if (error?.message === "STUDENT_NOT_FOUND") {
         return res.status(404).json({ error: "Học viên sở hữu biên lai không tồn tại." });
+      }
+      if (error?.message === "PAYMENT_MISSING_STUDENT_ID") {
+        return res.status(400).json({ error: "Chứng từ thiếu thông tin ID học viên." });
       }
       if (error?.message?.includes("PAYMENT_CANCEL_TIMEOUT")) {
         return res.status(504).json({

@@ -92,20 +92,18 @@ function checkRules() {
     
     // Check if checkRestWriteFallbackAllowed simply returns true
     const fallbackTruePattern = /function\s+checkRestWriteFallbackAllowed\s*\([^)]*\)\s*:\s*boolean\s*\{\s*return\s+true\s*;?\s*\}/;
-    if (fallbackTruePattern.test(serverContent)) {
+    if (fallbackTruePattern.test(serverContent) || serverContent.includes("function checkRestWriteFallbackAllowed(res: any): boolean {\n  return true;\n}")) {
       console.error(`[FAIL] checkRestWriteFallbackAllowed đang cho phép bypass ghi REST tự do (return true).`);
       anyFailed = true;
     } else {
       console.log(`[PASS] checkRestWriteFallbackAllowed có cấu hình bảo mật.`);
     }
 
-    // Check if /api/payments/cancel route contains Accountant wide-access check
-    // e.g. ["Admin", "Accountant"].includes(user.role) inside the body or is not restricted strictly
-    // Or specifically let's check for "Accountant" allowed in payments cancel
+    // Check if /api/payments/cancel route contains Accountant wide-access check or the specific ["Admin", "Accountant"] list definition
     const cancelEndpointIndex = serverContent.indexOf('/api/payments/cancel');
     if (cancelEndpointIndex !== -1) {
       const cancelScope = serverContent.slice(cancelEndpointIndex, cancelEndpointIndex + 500);
-      if (cancelScope.includes('Accountant')) {
+      if (cancelScope.includes('Accountant') || cancelScope.includes('["Admin", "Accountant"].includes(user.role)')) {
         console.error(`[FAIL] endpoint hủy hóa đơn /api/payments/cancel vẫn cho phép role Accountant truy cập.`);
         anyFailed = true;
       } else {

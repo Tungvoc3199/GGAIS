@@ -50,6 +50,7 @@ export const Finance: React.FC = () => {
   const [isCancellingPayment, setIsCancellingPayment] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [approvingPaymentId, setApprovingPaymentId] = useState<string | null>(null);
+  const [financeNotice, setFinanceNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const isApprovedActivePayment = (p: Payment) =>
     p.status === 'Đã duyệt' && p.isCancelled === false;
@@ -174,6 +175,7 @@ export const Finance: React.FC = () => {
       alert('Quyền truy cập bị từ chối: Chỉ Admin mới được phép hủy chứng từ doanh thu.');
       return;
     }
+    setFinanceNotice(null);
     setCancellingPayId(payId);
     setCancelReason('');
     setCancelError(null);
@@ -182,12 +184,18 @@ export const Finance: React.FC = () => {
   const handleConfirmCancel = async () => {
     if (!cancellingPayId || !cancelReason.trim() || isCancellingPayment) return;
     setCancelError(null);
+    setFinanceNotice(null);
     try {
       setIsCancellingPayment(true);
       const res = await cancelPayment(cancellingPayId, cancelReason.trim());
+      setIsCancellingPayment(false);
       setCancellingPayId(null);
       setCancelReason("");
-      alert(res?.message || "Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.");
+      setCancelError(null);
+      setFinanceNotice({
+        type: 'success',
+        message: res?.message || 'Đã hủy phiếu thành công. Doanh thu và công nợ đã được cập nhật.'
+      });
     } catch (error: any) {
       console.error("Lỗi khi hủy phiếu - full object:", error);
       const msg = error?.message
@@ -196,6 +204,7 @@ export const Finance: React.FC = () => {
         || JSON.stringify(error)
         || "Lỗi không xác định khi hủy phiếu (xem console).";
       setCancelError(msg);
+      setFinanceNotice(null);
     } finally {
       setIsCancellingPayment(false);
     }
@@ -213,6 +222,24 @@ export const Finance: React.FC = () => {
           Theo dõi dòng tiền thu học phí, kiểm soát hoàn thu và danh sách học nợ quá hạn
         </p>
       </div>
+
+      {financeNotice && (
+        <div className={`p-4 rounded-2xl border flex justify-between items-center text-xs font-bold leading-relaxed ${
+          financeNotice.type === 'success'
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+            : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          <span>{financeNotice.message}</span>
+          {financeNotice.type === 'success' && (
+            <button
+              onClick={() => setFinanceNotice(null)}
+              className="text-emerald-600 hover:text-emerald-800 font-extrabold ml-2 cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main financial cards overview */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -509,12 +536,15 @@ export const Finance: React.FC = () => {
                             try {
                               setApprovingPaymentId(p.id);
                               await approvePayment(p.id);
-                              alert(
-                                `Đã duyệt thành công phiếu đóng ${p.amount.toLocaleString('vi-VN')} ₫ ` +
-                                `của học viên ${student?.name || ''}.`
-                              );
+                              setFinanceNotice({
+                                type: 'success',
+                                message: `Đã duyệt thành công phiếu đóng ${p.amount.toLocaleString('vi-VN')} ₫ của học viên ${student?.name || ''}.`
+                              });
                             } catch (error: any) {
-                              alert(`Duyệt phiếu thất bại: ${error?.message || String(error)}`);
+                              setFinanceNotice({
+                                type: 'error',
+                                message: `Duyệt phiếu thất bại: ${error?.message || String(error)}`
+                              });
                             } finally {
                               setApprovingPaymentId(null);
                             }

@@ -17,10 +17,42 @@ function uniqueReasons(reasons: string[]): string[] {
   return Array.from(new Set(reasons.filter(Boolean)));
 }
 
+export function normalizeDateInput(date: string): string | null {
+  const raw = String(date || '').trim();
+  if (!raw) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const parsed = new Date(`${raw}T00:00:00`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === raw ? raw : null;
+  }
+
+  const slashMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (slashMatch) {
+    const [, dd, mm, yyyy] = slashMatch;
+    const normalized = `${yyyy}-${String(Number(mm)).padStart(2, '0')}-${String(Number(dd)).padStart(2, '0')}`;
+    return normalizeDateInput(normalized);
+  }
+
+  const vietnameseMatch = raw.match(/(?:ngày\s*)?(\d{1,2})\D+(\d{1,2})\D+(\d{4})/i);
+  if (vietnameseMatch) {
+    const [, dd, mm, yyyy] = vietnameseMatch;
+    const normalized = `${yyyy}-${String(Number(mm)).padStart(2, '0')}-${String(Number(dd)).padStart(2, '0')}`;
+    return normalizeDateInput(normalized);
+  }
+
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) {
+    const yyyy = parsed.getFullYear();
+    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
+    const dd = String(parsed.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return null;
+}
+
 function isValidDateString(date: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
-  const parsed = new Date(`${date}T00:00:00`);
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+  return normalizeDateInput(date) !== null;
 }
 
 function isValidTimeString(time: string): boolean {
@@ -148,16 +180,17 @@ export function checkLessonConflicts(
   students?: Student[]
 ): ConflictResult {
   const reasons: string[] = [];
+  const normalizedDate = normalizeDateInput(newLesson.date);
 
   if (!newLesson.studentId) reasons.push('Chưa chọn học viên.');
   if (!newLesson.instructorId) reasons.push('Chưa chọn giảng viên.');
   if (!newLesson.vehicleId) reasons.push('Chưa chọn xe tập lái.');
-  if (!isValidDateString(newLesson.date)) reasons.push('Ngày học không hợp lệ.');
+  if (!normalizedDate) reasons.push('Ngày học không hợp lệ.');
   if (!isValidTimeString(newLesson.startTime) || !isValidTimeString(newLesson.endTime)) {
     reasons.push('Giờ học phải có định dạng HH:mm hợp lệ.');
   }
 
-  if (reasons.length > 0) {
+  if (reasons.length > 0 || !normalizedDate) {
     return { hasConflict: true, reasons: uniqueReasons(reasons) };
   }
 
@@ -212,11 +245,11 @@ export function checkLessonConflicts(
       reasons.push(`Ngoài khung giờ làm việc của GV ${teacher.name} (${teachHours.start} - ${teachHours.end}).`);
     }
 
-    if ((teacher.daysOff || []).includes(newLesson.date)) {
-      reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${newLesson.date}.`);
+    if ((teacher.daysOff || []).includes(normalizedDate)) {
+      reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${normalizedDate}.`);
     }
 
-    const lessonDateObj = new Date(`${newLesson.date}T00:00:00`);
+    const lessonDateObj = new Date(`${normalizedDate}T00:00:00`);
     const dayOfWeek = lessonDateObj.getDay();
     const workingDays = teacher.workingDays || [];
     if (workingDays.length > 0 && !workingDays.includes(dayOfWeek)) {
@@ -249,20 +282,20 @@ export function checkLessonConflicts(
   if (student) {
     const studentLessonsOnDay = existingLessons.filter(l =>
       l.studentId === newLesson.studentId &&
-      l.date === newLesson.date &&
+      normalizeDateInput(l.date) === normalizedDate &&
       l.id !== newLesson.id &&
       isActiveLesson(l)
     );
 
     if (studentLessonsOnDay.length >= maxDayLessons) {
-      reasons.push(`Học viên ${student.name} đã đạt giới hạn ${maxDayLessons} ca học trong ngày ${newLesson.date}.`);
+      reasons.push(`Học viên ${student.name} đã đạt giới hạn ${maxDayLessons} ca học trong ngày ${normalizedDate}.`);
     }
   }
 
   for (const lesson of existingLessons) {
     if (lesson.id === newLesson.id) continue;
     if (!isActiveLesson(lesson)) continue;
-    if (lesson.date !== newLesson.date) continue;
+    if (normalizeDateInput(lesson.date) !== normalizedDate) continue;
 
     const itemStartM = timeToMinutes(lesson.startTime);
     const itemEndM = timeToMinutes(lesson.endTime);
@@ -315,8 +348,9 @@ export function suggestAvailableSlots(
   const startMinutes = timeToMinutes(schoolHours.start);
   const endMinutes = timeToMinutes(schoolHours.end);
   const duration = normalizeDuration(request.duration, settings);
+  const normalizedRequestDate = normalizeDateInput(request.date) || new Date().toISOString().slice(0, 10);
 
-  let currentDay = new Date(`${request.date}T00:00:00`);
+  let currentDay = new Date(`${normalizedRequestDate}T00:00:00`);
   if (Number.isNaN(currentDay.getTime())) currentDay = new Date();
 
   for (let d = 0; d < 14; d++) {
@@ -390,8 +424,10 @@ export function runAutoSchedulingEngine(
 } {
   const suggestions: any[] = [];
   const duration = normalizeDuration(params.duration, settings);
-  const dateStartObj = new Date(`${params.startDate}T00:00:00`);
-  const dateEndObj = new Date(`${params.endDate}T00:00:00`);
+  const normalizedStartDate = normalizeDateInput(params.startDate) || new Date().toISOString().slice(0, 10);
+  const normalizedEndDate = normalizeDateInput(params.endDate) || normalizedStartDate;
+  const dateStartObj = new Date(`${normalizedStartDate}T00:00:00`);
+  const dateEndObj = new Date(`${normalizedEndDate}T00:00:00`);
 
   if (Number.isNaN(dateStartObj.getTime()) || Number.isNaN(dateEndObj.getTime()) || dateEndObj < dateStartObj) {
     return {
@@ -401,7 +437,7 @@ export function runAutoSchedulingEngine(
         studentId: params.studentIds[0] || '',
         instructorId: params.instructorPref,
         vehicleId: params.vehiclePref,
-        date: params.startDate,
+        date: normalizedStartDate,
         startTime: '08:00',
         endTime: minutesToTime(timeToMinutes('08:00') + duration),
         lessonType: 'Sa hình',
@@ -531,7 +567,7 @@ export function runAutoSchedulingEngine(
           studentId: studId,
           instructorId: fallbackTeacherId,
           vehicleId: fallbackVehicleId,
-          date: params.startDate,
+          date: normalizedStartDate,
           duration
         },
         tempArrLessons,
@@ -546,13 +582,13 @@ export function runAutoSchedulingEngine(
         studentId: studId,
         instructorId: fallbackTeacherId,
         vehicleId: fallbackVehicleId,
-        date: params.startDate,
+        date: normalizedStartDate,
         startTime: '08:00',
         endTime: minutesToTime(timeToMinutes('08:00') + duration),
         lessonType: buildLessonType(studentObj),
         warnings: [
           ...warningNotes,
-          `Không tìm thấy khoảng thời gian trống phù hợp cho ${studentObj.name} từ ${params.startDate} tới ${params.endDate}.`,
+          `Không tìm thấy khoảng thời gian trống phù hợp cho ${studentObj.name} từ ${normalizedStartDate} tới ${normalizedEndDate}.`,
           altOptions.length > 0
             ? `Phương án thay thế: ${altOptions.map(o => `${o.startTime} - ${o.endTime} (${o.date})`).join(', ')}`
             : 'Đề xuất: mở rộng khoảng ngày, đổi giáo viên/xe hoặc giảm ràng buộc giờ học.'
@@ -580,6 +616,7 @@ export function getFreeSlotsReport(
   const minEnd = timeToMinutes(schoolHours.end);
   const duration = normalizeDuration(durationMinutes, settings);
   const freeSlots: { startTime: string; endTime: string; label: string }[] = [];
+  const normalizedDate = normalizeDateInput(date) || date;
 
   for (let m = minStart; m + duration <= minEnd; m += 30) {
     const startStr = minutesToTime(m);
@@ -588,7 +625,7 @@ export function getFreeSlotsReport(
     let isReserved = false;
     for (const les of existingLessons) {
       if (!isActiveLesson(les)) continue;
-      if (les.date !== date) continue;
+      if (normalizeDateInput(les.date) !== normalizedDate) continue;
       const overlaps = doIntervalsOverlap(startStr, endStr, les.startTime, les.endTime);
       if (overlaps && (les.instructorId === instructorId || les.vehicleId === vehicleId)) {
         isReserved = true;

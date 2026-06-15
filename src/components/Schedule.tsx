@@ -520,9 +520,28 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
 
   // Submit hander with complex conflict validation rules
   const handleSaveLesson = async (e: React.FormEvent, isOverride = false) => {
-    e.preventDefault();
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
     setLastSaveMessage('');
     setIsSavingLesson(true);
+    setLastSaveMessage('Đang kiểm tra và lưu lịch học...');
+
+    if (!formDate || !formStart || !formEnd) {
+      const message = 'Vui lòng nhập đầy đủ ngày học, giờ bắt đầu và giờ kết thúc.';
+      setConflictWarning([message]);
+      showScheduleToast(message, 'error');
+      setIsSavingLesson(false);
+      return;
+    }
+
+    if (formStart >= formEnd) {
+      const message = 'Giờ kết thúc phải lớn hơn giờ bắt đầu.';
+      setConflictWarning([message]);
+      showScheduleToast(message, 'error');
+      setIsSavingLesson(false);
+      return;
+    }
 
     try {
       const selectedStudent = students.find(s => s.id === formStudentId);
@@ -1245,7 +1264,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                 </div>
               )}
 
-              <form onSubmit={(e) => handleSaveLesson(e, false)} className="space-y-4">
+              <form onSubmit={(e) => handleSaveLesson(e, false)} noValidate className="space-y-4">
                 
                 {/* Inputs Fields */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
@@ -1418,11 +1437,11 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                     <div className="flex justify-end">
                       <button
                         type="button"
-                        onClick={(e) => handleSaveLesson(e, true)}
-                        disabled={!overrideReason}
+                        onClick={(e) => handleSaveLesson(e as any, true)}
+                        disabled={!overrideReason || isSavingLesson}
                         className="bg-amber-600 hover:bg-amber-750 disabled:opacity-50 text-white font-bold text-xs py-2 px-4 rounded-xl cursor-pointer shadow-xs"
                       >
-                        ✓ Đồng ý Ghi Chồng Lịch
+                        {isSavingLesson ? 'ĐANG LƯU...' : '✓ Đồng ý Ghi Chồng Lịch'}
                       </button>
                     </div>
                   </div>
@@ -1463,9 +1482,10 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                     
                     {!showOverride && (
                       <button
-                        type="submit"
+                        type="button"
                         disabled={isSavingLesson}
-                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-xs transition-all"
+                        onClick={(e) => handleSaveLesson(e as any, false)}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-xs transition-all active:scale-95"
                       >
                         {isSavingLesson ? 'ĐANG LƯU LỊCH...' : '✓ GHI LẠI LỊCH DẠY'}
                       </button>

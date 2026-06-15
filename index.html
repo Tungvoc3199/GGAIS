@@ -186,47 +186,63 @@
             text.includes('ghi lại lịch dạy');
         };
 
-        const hydrateVisibleSelectDefaults = (form) => {
-          if (!form || !isLessonBookingForm(form)) return 0;
-          let fixed = 0;
-          const selects = Array.from(form.querySelectorAll('select'));
-          selects.slice(0, 3).forEach((select) => {
-            if (!select.value && select.options && select.options.length > 0) {
-              const firstRealOption = Array.from(select.options).find((opt) => !opt.disabled && opt.value);
-              if (firstRealOption) {
-                select.value = firstRealOption.value;
-                select.dispatchEvent(new Event('input', { bubbles: true }));
-                select.dispatchEvent(new Event('change', { bubbles: true }));
-                fixed += 1;
-              }
+        const getRealSelectValue = (select) => {
+          if (!select) return '';
+          const selected = select.options && select.selectedIndex >= 0 ? select.options[select.selectedIndex] : null;
+          if (selected && selected.value) return selected.value;
+          const firstRealOption = Array.from(select.options || []).find((opt) => !opt.disabled && opt.value);
+          return firstRealOption ? firstRealOption.value : '';
+        };
+
+        const forceReactSelectValue = (select, value) => {
+          if (!select || !value) return;
+          const descriptor = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value');
+          if (descriptor && descriptor.set) descriptor.set.call(select, value);
+          else select.value = value;
+          select.dispatchEvent(new Event('input', { bubbles: true }));
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+
+        const syncBookingSelects = (form) => {
+          if (!form || !isLessonBookingForm(form)) return false;
+          const selects = Array.from(form.querySelectorAll('select')).slice(0, 3);
+          let touched = false;
+          selects.forEach((select) => {
+            const realValue = getRealSelectValue(select);
+            if (realValue) {
+              forceReactSelectValue(select, realValue);
+              touched = true;
             }
           });
-          return fixed;
+          return touched;
         };
 
         document.addEventListener('click', (event) => {
           const target = event.target;
           const button = target && target.closest ? target.closest('button') : null;
           if (!button || String(button.textContent || '').toLowerCase().indexOf('ghi lại lịch dạy') === -1) return;
-          const form = button.closest('form');
-          hydrateVisibleSelectDefaults(form);
+          syncBookingSelects(button.closest('form'));
         }, true);
 
         document.addEventListener('submit', (event) => {
           const form = event.target;
           if (!isLessonBookingForm(form)) return;
-          const fixed = hydrateVisibleSelectDefaults(form);
-          if (fixed > 0 && form.dataset.lhpHydratedOnce !== 'true') {
-            event.preventDefault();
-            event.stopImmediatePropagation();
-            form.dataset.lhpHydratedOnce = 'true';
-            window.__lhpToast('Đã đồng bộ lại lựa chọn học viên, giảng viên và xe. Đang lưu lại lịch học...', 'success');
-            window.setTimeout(() => {
-              const submitButton = Array.from(form.querySelectorAll('button')).find((btn) => String(btn.textContent || '').toLowerCase().includes('ghi lại lịch dạy'));
-              if (form.requestSubmit && submitButton) form.requestSubmit(submitButton);
-              else if (form.requestSubmit) form.requestSubmit();
-            }, 80);
-          }
+
+          const now = Date.now();
+          const lastSyncAt = Number(form.dataset.lhpSelectSyncAt || '0');
+          if (now - lastSyncAt < 1200) return;
+
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          form.dataset.lhpSelectSyncAt = String(now);
+          syncBookingSelects(form);
+          window.__lhpToast('Đang đồng bộ đúng mã học viên, giảng viên và xe trước khi lưu lịch...', 'success');
+
+          window.setTimeout(() => {
+            const submitButton = Array.from(form.querySelectorAll('button')).find((btn) => String(btn.textContent || '').toLowerCase().includes('ghi lại lịch dạy'));
+            if (form.requestSubmit && submitButton) form.requestSubmit(submitButton);
+            else if (form.requestSubmit) form.requestSubmit();
+          }, 250);
         }, true);
       })();
     </script>

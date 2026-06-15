@@ -59,6 +59,54 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     }
   };
 
+  const isExistingInstructorId = (id?: string) => instructors.some(i => i.id === id);
+  const isExistingVehicleId = (id?: string) => vehicles.some(v => v.id === id);
+
+  const isOperationalVehicle = (vehicle: Vehicle | undefined) => {
+    const status = String(vehicle?.status || '').trim().toLowerCase();
+    if (!vehicle) return false;
+    if (['bảo dưỡng', 'sửa', 'hỏng', 'ngừng', 'không hoạt động', 'khóa', 'đã bán'].some(k => status.includes(k))) return false;
+    return true;
+  };
+
+  const getCompatibleInstructorId = (student?: Student, preferredId?: string) => {
+    if (preferredId && isExistingInstructorId(preferredId)) return preferredId;
+    if (!student) return instructors[0]?.id || '';
+
+    const assigned = instructors.find(i =>
+      i.id === student.assignedInstructorId &&
+      i.active !== false &&
+      (!i.status || i.status === 'Đang dạy') &&
+      i.vehicleTypes?.includes(student.licenseClass)
+    );
+    if (assigned) return assigned.id;
+
+    const compatible = instructors.find(i =>
+      i.active !== false &&
+      (!i.status || i.status === 'Đang dạy') &&
+      i.vehicleTypes?.includes(student.licenseClass)
+    );
+    return compatible?.id || instructors[0]?.id || '';
+  };
+
+  const getCompatibleVehicleId = (student?: Student, preferredId?: string) => {
+    if (preferredId && isExistingVehicleId(preferredId)) return preferredId;
+    if (!student) return vehicles[0]?.id || '';
+
+    const assigned = vehicles.find(v =>
+      v.id === student.assignedVehicleId &&
+      isOperationalVehicle(v) &&
+      (!v.suitableLicenseClass || v.suitableLicenseClass === student.licenseClass)
+    );
+    if (assigned) return assigned.id;
+
+    const compatible = vehicles.find(v =>
+      isOperationalVehicle(v) &&
+      (!v.suitableLicenseClass || v.suitableLicenseClass === student.licenseClass)
+    );
+    return compatible?.id || vehicles[0]?.id || '';
+  };
+
   // Calendar Views: 'list' | 'day' | 'week' | 'month' | 'resource_instructor' | 'resource_vehicle'
   const [viewType, setViewType] = useState<'list' | 'day' | 'week' | 'month' | 'by_instructor' | 'by_vehicle'>('list');
   const getTodayString = () => {
@@ -117,6 +165,20 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
       }
     }
   }, [quickFormOpen, onCloseQuickForm]);
+
+  useEffect(() => {
+    if (!isBooking || !formStudentId) return;
+    const student = students.find(s => s.id === formStudentId);
+    if (!student) return;
+
+    if (!isExistingInstructorId(formInstructorId)) {
+      setFormInstructorId(getCompatibleInstructorId(student, student.assignedInstructorId));
+    }
+
+    if (!isExistingVehicleId(formVehicleId)) {
+      setFormVehicleId(getCompatibleVehicleId(student, student.assignedVehicleId));
+    }
+  }, [isBooking, formStudentId, instructors, vehicles, students]);
 
   const renderLessonCard = (les: Lesson) => {
     const student = students.find(s => s.id === les.studentId);
@@ -391,8 +453,8 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     if (students.length > 0) {
       const defaultS = students[0];
       setFormStudentId(defaultS.id);
-      setFormInstructorId(defaultS.assignedInstructorId || instructors[0]?.id || '');
-      setFormVehicleId(defaultS.assignedVehicleId || vehicles[0]?.id || '');
+      setFormInstructorId(getCompatibleInstructorId(defaultS, defaultS.assignedInstructorId));
+      setFormVehicleId(getCompatibleVehicleId(defaultS, defaultS.assignedVehicleId));
       setFormPickup(defaultS.address || 'Đón tại Trung tâm');
     } else {
       setFormStudentId('');
@@ -445,16 +507,25 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
   const handleSaveLesson = async (e: React.FormEvent, isOverride = false) => {
     e.preventDefault();
 
-    if (!formStudentId || !formInstructorId || !formVehicleId) {
-      alert('Vui lòng chọn đầy đủ Học viên, Giảng viên và Xe tập lái.');
+    const selectedStudent = students.find(s => s.id === formStudentId);
+    const safeInstructorId = getCompatibleInstructorId(selectedStudent, formInstructorId);
+    const safeVehicleId = getCompatibleVehicleId(selectedStudent, formVehicleId);
+
+    if (!formStudentId || !safeInstructorId || !safeVehicleId) {
+      const message = 'Không tìm thấy đủ học viên, giảng viên hoặc xe hợp lệ để xếp lịch. Vui lòng kiểm tra dữ liệu giảng viên/xe.';
+      setConflictWarning([message]);
+      showScheduleToast(message, 'error');
       return;
     }
+
+    setFormInstructorId(safeInstructorId);
+    setFormVehicleId(safeVehicleId);
 
     const payload = {
       id: editingLessonId || undefined,
       studentId: formStudentId,
-      instructorId: formInstructorId,
-      vehicleId: formVehicleId,
+      instructorId: safeInstructorId,
+      vehicleId: safeVehicleId,
       date: formDate,
       startTime: formStart,
       endTime: formEnd,
@@ -1119,14 +1190,12 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                     <select
                       value={formStudentId}
                       onChange={(e) => {
-                        const studId = e.target.value;
-                        setFormStudentId(studId);
-                        const sObj = students.find(s => s.id === studId);
-                        if (sObj) {
-                          setFormInstructorId(sObj.assignedInstructorId || instructors[0]?.id || '');
-                          setFormVehicleId(sObj.assignedVehicleId || vehicles[0]?.id || '');
-                          setFormPickup(sObj.address || 'Đon tại cơ sở đào tạo');
-                        }
+                        const nextStudentId = e.target.value;
+                        const student = students.find(s => s.id === nextStudentId);
+                        setFormStudentId(nextStudentId);
+                        setFormPickup(student?.address || 'Đón tại Trung tâm');
+                        setFormInstructorId(getCompatibleInstructorId(student, student?.assignedInstructorId));
+                        setFormVehicleId(getCompatibleVehicleId(student, student?.assignedVehicleId));
                       }}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-slate-800 text-xs font-bold"
                     >

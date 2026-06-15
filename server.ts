@@ -1495,16 +1495,91 @@ function isVehicleOperational(status: any): boolean {
     try {
       const adminDb = getAdminDb();
       const studentSnap = await adminDb.collection("students").doc(lesson.studentId).get();
-      const instructorSnap = await adminDb.collection("instructors").doc(lesson.instructorId).get();
-      const vehicleSnap = await adminDb.collection("vehicles").doc(lesson.vehicleId).get();
-
       if (!studentSnap.exists) return res.status(400).json({ error: "Học viên liên kết lịch học không khả dụng." });
-      if (!instructorSnap.exists) return res.status(400).json({ error: "Giáo viên hướng dẫn liên kết không tồn tại." });
-      if (!vehicleSnap.exists) return res.status(400).json({ error: "Xe liên kết không tồn tại hoặc đã bị xóa." });
-
       const student = studentSnap.data() || {};
-      const instructor = instructorSnap.data() || {};
-      const vehicle = vehicleSnap.data() || {};
+
+      let finalInstructorId = lesson.instructorId;
+      let instructor = null;
+      let instructorSnap = await adminDb.collection("instructors").doc(finalInstructorId).get();
+      if (instructorSnap.exists) {
+        instructor = instructorSnap.data() || {};
+      } else {
+        // Fallback for instructor
+        if (student.assignedInstructorId) {
+          const assignedSnap = await adminDb.collection("instructors").doc(student.assignedInstructorId).get();
+          if (assignedSnap.exists) {
+            finalInstructorId = student.assignedInstructorId;
+            instructor = assignedSnap.data();
+          }
+        }
+        if (!instructor) {
+          const instructorsSnapshot = await adminDb.collection("instructors").get();
+          const candidates: any[] = [];
+          if (instructorsSnapshot && !instructorsSnapshot.empty) {
+            instructorsSnapshot.forEach(doc => {
+              const data = doc.data();
+              if (
+                data.active !== false &&
+                (!data.status || data.status === "Đang dạy") &&
+                (data.vehicleTypes || []).includes(student.licenseClass)
+              ) {
+                candidates.push({ id: doc.id, ...data });
+              }
+            });
+          }
+          if (candidates.length > 0) {
+            finalInstructorId = candidates[0].id;
+            instructor = candidates[0];
+          }
+        }
+        if (!instructor) {
+          return res.status(400).json({
+            error: "Không có giảng viên hợp lệ để xếp lịch cho học viên này. Vui lòng kiểm tra danh sách giảng viên."
+          });
+        }
+        lesson.instructorId = finalInstructorId;
+      }
+
+      let finalVehicleId = lesson.vehicleId;
+      let vehicle = null;
+      let vehicleSnap = await adminDb.collection("vehicles").doc(finalVehicleId).get();
+      if (vehicleSnap.exists) {
+        vehicle = vehicleSnap.data() || {};
+      } else {
+        // Fallback for vehicle
+        if (student.assignedVehicleId) {
+          const assignedSnap = await adminDb.collection("vehicles").doc(student.assignedVehicleId).get();
+          if (assignedSnap.exists && isVehicleOperational(assignedSnap.data()?.status)) {
+            finalVehicleId = student.assignedVehicleId;
+            vehicle = assignedSnap.data();
+          }
+        }
+        if (!vehicle) {
+          const vehiclesSnapshot = await adminDb.collection("vehicles").get();
+          const candidates: any[] = [];
+          if (vehiclesSnapshot && !vehiclesSnapshot.empty) {
+            vehiclesSnapshot.forEach(doc => {
+              const data = doc.data();
+              if (
+                isVehicleOperational(data.status) &&
+                (!data.suitableLicenseClass || data.suitableLicenseClass === student.licenseClass)
+              ) {
+                candidates.push({ id: doc.id, ...data });
+              }
+            });
+          }
+          if (candidates.length > 0) {
+            finalVehicleId = candidates[0].id;
+            vehicle = candidates[0];
+          }
+        }
+        if (!vehicle) {
+          return res.status(400).json({
+            error: "Không có xe tập hợp lệ để xếp lịch cho học viên này. Vui lòng kiểm tra danh sách xe."
+          });
+        }
+        lesson.vehicleId = finalVehicleId;
+      }
 
       // Time validity
       if (lesson.startTime >= lesson.endTime) {

@@ -1,0 +1,77 @@
+name: Deploy Cloud Run
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'server.ts'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'index.html'
+      - 'vite.config.ts'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy-cloud-run.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cloud-run-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT_ID: lich-hoc-pro-production
+  REGION: asia-southeast1
+  SERVICE_NAME: lich-hoc-pro
+  RUNTIME_SERVICE_ACCOUNT: lich-hoc-pro-backend@lich-hoc-pro-production.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify lint, build and static security
+        run: npm run verify
+
+      - name: Authenticate Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: '${{ secrets.GCP_FIREBASE_SERVICE_ACCOUNT }}'
+          project_id: '${{ env.PROJECT_ID }}'
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: '${{ env.PROJECT_ID }}'
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "$SERVICE_NAME" \
+            --source . \
+            --region "$REGION" \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
+            --set-env-vars "NODE_ENV=production,ALLOW_DEV_REST_FALLBACK=false" \
+            --quiet
+
+      - name: Show deployed URL
+        run: |
+          gcloud run services describe "$SERVICE_NAME" \
+            --region "$REGION" \
+            --format='value(status.url)'

@@ -17,42 +17,65 @@ function uniqueReasons(reasons: string[]): string[] {
   return Array.from(new Set(reasons.filter(Boolean)));
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function isRealDateParts(year: number, month: number, day: number): boolean {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (year < 1900 || year > 2200 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const d = new Date(year, month - 1, day);
+  return d.getFullYear() === year && d.getMonth() === month - 1 && d.getDate() === day;
+}
+
+function dateToYmd(date: Date): string {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function parseLocalYmd(date: string): Date | null {
+  const normalized = normalizeDateInput(date);
+  if (!normalized) return null;
+  const [year, month, day] = normalized.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
 export function normalizeDateInput(date: string): string | null {
   const raw = String(date || '').trim();
   if (!raw) return null;
 
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const parsed = new Date(`${raw}T00:00:00`);
-    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === raw ? raw : null;
+  const ymdMatch = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) {
+    const [, yyyy, mm, dd] = ymdMatch;
+    const year = Number(yyyy);
+    const month = Number(mm);
+    const day = Number(dd);
+    return isRealDateParts(year, month, day) ? `${year}-${pad2(month)}-${pad2(day)}` : null;
   }
 
   const slashMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (slashMatch) {
     const [, dd, mm, yyyy] = slashMatch;
-    const normalized = `${yyyy}-${String(Number(mm)).padStart(2, '0')}-${String(Number(dd)).padStart(2, '0')}`;
-    return normalizeDateInput(normalized);
+    const year = Number(yyyy);
+    const month = Number(mm);
+    const day = Number(dd);
+    return isRealDateParts(year, month, day) ? `${year}-${pad2(month)}-${pad2(day)}` : null;
   }
 
   const vietnameseMatch = raw.match(/(?:ngày\s*)?(\d{1,2})\D+(\d{1,2})\D+(\d{4})/i);
   if (vietnameseMatch) {
     const [, dd, mm, yyyy] = vietnameseMatch;
-    const normalized = `${yyyy}-${String(Number(mm)).padStart(2, '0')}-${String(Number(dd)).padStart(2, '0')}`;
-    return normalizeDateInput(normalized);
+    const year = Number(yyyy);
+    const month = Number(mm);
+    const day = Number(dd);
+    return isRealDateParts(year, month, day) ? `${year}-${pad2(month)}-${pad2(day)}` : null;
   }
 
   const parsed = new Date(raw);
   if (!Number.isNaN(parsed.getTime())) {
-    const yyyy = parsed.getFullYear();
-    const mm = String(parsed.getMonth() + 1).padStart(2, '0');
-    const dd = String(parsed.getDate()).padStart(2, '0');
-    return `${yyyy}-${mm}-${dd}`;
+    return dateToYmd(parsed);
   }
 
   return null;
-}
-
-function isValidDateString(date: string): boolean {
-  return normalizeDateInput(date) !== null;
 }
 
 function isValidTimeString(time: string): boolean {
@@ -102,7 +125,7 @@ export function minutesToTime(minutes: number): string {
   const safeMinutes = Math.max(0, Math.min(23 * 60 + 59, minutes));
   const h = Math.floor(safeMinutes / 60);
   const m = safeMinutes % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  return `${pad2(h)}:${pad2(m)}`;
 }
 
 /**
@@ -249,7 +272,7 @@ export function checkLessonConflicts(
       reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${normalizedDate}.`);
     }
 
-    const lessonDateObj = new Date(`${normalizedDate}T00:00:00`);
+    const lessonDateObj = parseLocalYmd(normalizedDate) || new Date();
     const dayOfWeek = lessonDateObj.getDay();
     const workingDays = teacher.workingDays || [];
     if (workingDays.length > 0 && !workingDays.includes(dayOfWeek)) {
@@ -348,13 +371,11 @@ export function suggestAvailableSlots(
   const startMinutes = timeToMinutes(schoolHours.start);
   const endMinutes = timeToMinutes(schoolHours.end);
   const duration = normalizeDuration(request.duration, settings);
-  const normalizedRequestDate = normalizeDateInput(request.date) || new Date().toISOString().slice(0, 10);
 
-  let currentDay = new Date(`${normalizedRequestDate}T00:00:00`);
-  if (Number.isNaN(currentDay.getTime())) currentDay = new Date();
+  let currentDay = parseLocalYmd(request.date) || new Date();
 
   for (let d = 0; d < 14; d++) {
-    const dayStr = currentDay.toISOString().slice(0, 10);
+    const dayStr = dateToYmd(currentDay);
 
     for (let min = startMinutes; min + duration <= endMinutes; min += 30) {
       const candStart = minutesToTime(min);
@@ -424,12 +445,10 @@ export function runAutoSchedulingEngine(
 } {
   const suggestions: any[] = [];
   const duration = normalizeDuration(params.duration, settings);
-  const normalizedStartDate = normalizeDateInput(params.startDate) || new Date().toISOString().slice(0, 10);
-  const normalizedEndDate = normalizeDateInput(params.endDate) || normalizedStartDate;
-  const dateStartObj = new Date(`${normalizedStartDate}T00:00:00`);
-  const dateEndObj = new Date(`${normalizedEndDate}T00:00:00`);
+  const dateStartObj = parseLocalYmd(params.startDate);
+  const dateEndObj = parseLocalYmd(params.endDate);
 
-  if (Number.isNaN(dateStartObj.getTime()) || Number.isNaN(dateEndObj.getTime()) || dateEndObj < dateStartObj) {
+  if (!dateStartObj || !dateEndObj || dateEndObj < dateStartObj) {
     return {
       success: false,
       suggestions: [{
@@ -437,7 +456,7 @@ export function runAutoSchedulingEngine(
         studentId: params.studentIds[0] || '',
         instructorId: params.instructorPref,
         vehicleId: params.vehiclePref,
-        date: normalizedStartDate,
+        date: normalizeDateInput(params.startDate) || params.startDate,
         startTime: '08:00',
         endTime: minutesToTime(timeToMinutes('08:00') + duration),
         lessonType: 'Sa hình',
@@ -480,8 +499,8 @@ export function runAutoSchedulingEngine(
 
     for (let dayOffset = 0; dayOffset < checkLimitDays && !found; dayOffset++) {
       const loopDateObj = new Date(dateStartObj);
-      loopDateObj.setDate(loopDateObj.getDate() + dayOffset);
-      const loopDateStr = loopDateObj.toISOString().slice(0, 10);
+      loopDateObj.setDate(dateStartObj.getDate() + dayOffset);
+      const loopDateStr = dateToYmd(loopDateObj);
       const dayOfWeek = loopDateObj.getDay();
 
       if (params.preferredDays.length > 0 && !params.preferredDays.includes(dayOfWeek)) continue;
@@ -567,7 +586,7 @@ export function runAutoSchedulingEngine(
           studentId: studId,
           instructorId: fallbackTeacherId,
           vehicleId: fallbackVehicleId,
-          date: normalizedStartDate,
+          date: normalizeDateInput(params.startDate) || params.startDate,
           duration
         },
         tempArrLessons,
@@ -582,13 +601,13 @@ export function runAutoSchedulingEngine(
         studentId: studId,
         instructorId: fallbackTeacherId,
         vehicleId: fallbackVehicleId,
-        date: normalizedStartDate,
+        date: normalizeDateInput(params.startDate) || params.startDate,
         startTime: '08:00',
         endTime: minutesToTime(timeToMinutes('08:00') + duration),
         lessonType: buildLessonType(studentObj),
         warnings: [
           ...warningNotes,
-          `Không tìm thấy khoảng thời gian trống phù hợp cho ${studentObj.name} từ ${normalizedStartDate} tới ${normalizedEndDate}.`,
+          `Không tìm thấy khoảng thời gian trống phù hợp cho ${studentObj.name} từ ${params.startDate} tới ${params.endDate}.`,
           altOptions.length > 0
             ? `Phương án thay thế: ${altOptions.map(o => `${o.startTime} - ${o.endTime} (${o.date})`).join(', ')}`
             : 'Đề xuất: mở rộng khoảng ngày, đổi giáo viên/xe hoặc giảm ràng buộc giờ học.'
@@ -615,8 +634,10 @@ export function getFreeSlotsReport(
   const minStart = timeToMinutes(schoolHours.start);
   const minEnd = timeToMinutes(schoolHours.end);
   const duration = normalizeDuration(durationMinutes, settings);
+  const normalizedDate = normalizeDateInput(date);
   const freeSlots: { startTime: string; endTime: string; label: string }[] = [];
-  const normalizedDate = normalizeDateInput(date) || date;
+
+  if (!normalizedDate) return freeSlots;
 
   for (let m = minStart; m + duration <= minEnd; m += 30) {
     const startStr = minutesToTime(m);

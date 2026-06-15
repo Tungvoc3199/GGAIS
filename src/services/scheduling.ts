@@ -94,14 +94,6 @@ export function checkLessonConflicts(
     if (teacher.daysOff.includes(newLesson.date)) {
       reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${newLesson.date}.`);
     }
-
-    // Check if weekday matches workingDays
-    const lessonDateObj = new Date(newLesson.date);
-    let dayOfWeek = lessonDateObj.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
-    if (dayOfWeek === 0) dayOfWeek = 7; // Align to 1=Mon, 2=Tue, ..., 7=Sun
-    if (!teacher.workingDays.includes(dayOfWeek)) {
-      reasons.push(`Giảng viên ${teacher.name} không làm việc vào Thứ ${dayOfWeek === 7 ? 'Chủ Nhật' : dayOfWeek + 1}.`);
-    }
   }
 
   // Check vehicle status

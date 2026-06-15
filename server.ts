@@ -1593,14 +1593,6 @@ function isVehicleOperational(status: any): boolean {
         });
       }
 
-      // 2. Instructor working Day
-      const dateObj = new Date(lesson.date);
-      const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 1 = Monday,... 6 = Saturday
-      const workingDays: number[] = instructor.workingDays || [];
-      if (!workingDays.includes(dayOfWeek) && override !== "true") {
-        return res.status(400).json({ error: `Giáo viên ${instructor.name} không đăng ký lịch dạy vào Thứ có mã số ${dayOfWeek}.` });
-      }
-
       // 3. Instructor daysOff
       const daysOff: string[] = instructor.daysOff || [];
       if (daysOff.includes(lesson.date) && override !== "true") {
@@ -1608,8 +1600,8 @@ function isVehicleOperational(status: any): boolean {
       }
 
       // 4. Time range fit
-      const workStart = instructor.workingHours?.start || "07:30";
-      const workEnd = instructor.workingHours?.end || "17:30";
+      const workStart = instructor.workingHours?.start || "07:00";
+      const workEnd = instructor.workingHours?.end || "21:00";
       if ((lesson.startTime < workStart || lesson.endTime > workEnd) && override !== "true") {
         return res.status(400).json({ error: `Lịch học (${lesson.startTime} - ${lesson.endTime}) nằm ngoài khung giờ làm việc của giáo viên (${workStart} - ${workEnd}).` });
       }
@@ -2797,7 +2789,7 @@ function isVehicleOperational(status: any): boolean {
           }
 
           if (teacher) {
-            const teachHours = teacher.workingHours || { start: "07:00", end: "18:00" };
+            const teachHours = teacher.workingHours || { start: "07:00", end: "21:00" };
             const teachStart = timeToMinutes(teachHours.start);
             const teachEnd = timeToMinutes(teachHours.end);
             const lessonStart = timeToMinutes(newL.startTime);
@@ -2809,13 +2801,6 @@ function isVehicleOperational(status: any): boolean {
 
             if (teacher.daysOff && teacher.daysOff.includes(newL.date)) {
               reasons.push(`Giảng viên ${teacher.name} có ngày nghỉ phép vào ngày ${newL.date}.`);
-            }
-
-            const lessonDateObj = new Date(newL.date);
-            let dayOfWeek = lessonDateObj.getDay();
-            if (dayOfWeek === 0) dayOfWeek = 7;
-            if (teacher.workingDays && !teacher.workingDays.includes(dayOfWeek)) {
-              reasons.push(`Giảng viên ${teacher.name} không xếp lịch Thứ ${dayOfWeek === 7 ? "Chủ Nhật" : dayOfWeek + 1}.`);
             }
           }
 
@@ -2968,7 +2953,7 @@ function isVehicleOperational(status: any): boolean {
             }
 
             if (teacher) {
-              const teachHours = teacher.workingHours || { start: "07:00", end: "18:00" };
+              const teachHours = teacher.workingHours || { start: "07:00", end: "21:00" };
               const teachStart = timeToMinutes(teachHours.start);
               const teachEnd = timeToMinutes(teachHours.end);
               const lessonStart = timeToMinutes(newL.startTime);
@@ -2980,13 +2965,6 @@ function isVehicleOperational(status: any): boolean {
 
               if (teacher.daysOff && teacher.daysOff.includes(newL.date)) {
                 reasons.push(`Giảng viên ${teacher.name} có ngày nghỉ phép vào ngày ${newL.date}.`);
-              }
-
-              const lessonDateObj = new Date(newL.date);
-              let dayOfWeek = lessonDateObj.getDay();
-              if (dayOfWeek === 0) dayOfWeek = 7;
-              if (teacher.workingDays && !teacher.workingDays.includes(dayOfWeek)) {
-                reasons.push(`Giảng viên ${teacher.name} không xếp lịch Thứ ${dayOfWeek === 7 ? "Chủ Nhật" : dayOfWeek + 1}.`);
               }
             }
 

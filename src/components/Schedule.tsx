@@ -122,6 +122,14 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
 
   // Filter lessons by text/student search in list view
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterInstructorId, setFilterInstructorId] = useState<string>('all');
+
+  const displayedLessons = lessons.filter(l => {
+    if (filterInstructorId && filterInstructorId !== 'all') {
+      return l.instructorId === filterInstructorId;
+    }
+    return true;
+  });
 
   // Lesson Edit/Add Form states
   const [isBooking, setIsBooking] = useState(false);
@@ -413,7 +421,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
 
   const getActiveLessons = (): Lesson[] => {
     if (viewType === 'list') {
-      return lessons.filter(l => {
+      return displayedLessons.filter(l => {
         if (!searchQuery) return true;
         const studentObj = students.find(s => s.id === l.studentId);
         return studentObj?.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -424,9 +432,9 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
       endOfWeek.setDate(startOfWeek.getDate() + 6);
       const startStr = startOfWeek.toISOString().split('T')[0];
       const endStr = endOfWeek.toISOString().split('T')[0];
-      return lessons.filter(l => l.date >= startStr && l.date <= endStr);
+      return displayedLessons.filter(l => l.date >= startStr && l.date <= endStr);
     } else {
-      return lessons.filter(l => l.date === selectedDate);
+      return displayedLessons.filter(l => l.date === selectedDate);
     }
   };
 
@@ -693,10 +701,10 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
       </div>
 
       {/* Date controls and View selectors */}
-      <div className="bg-white p-3 border border-slate-100 shadow-xs rounded-3xl flex flex-col md:flex-row justify-between items-center gap-4">
+      <div className="bg-white p-3 border border-slate-100 shadow-xs rounded-3xl flex flex-col xl:flex-row justify-between items-center gap-4">
         
         {/* Date Selector */}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => adjustDate(-1)}
             className="p-2 border border-slate-100 hover:bg-slate-50 rounded-xl cursor-pointer"
@@ -710,7 +718,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
               type="date"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent border-0 focus:outline-none cursor-pointer"
+              className="bg-transparent border-0 focus:outline-none cursor-pointer text-xs"
             />
           </div>
 
@@ -729,8 +737,48 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
           </button>
         </div>
 
+        {/* Quick Toggles and Teacher Filter */}
+        <div className="flex flex-wrap items-center gap-3.5 w-full xl:w-auto justify-center xl:justify-start">
+          {/* Day / Week Quick Toggle Buttons */}
+          <div className="flex bg-slate-50 p-1 rounded-xl text-[11px] font-bold text-slate-500 shadow-inner border border-slate-200/50">
+            <button
+              onClick={() => setViewType('day')}
+              className={`py-1.5 px-3 rounded-lg transition-all cursor-pointer ${
+                viewType === 'day' ? 'bg-white text-blue-600 shadow-xs font-black' : 'hover:text-slate-800'
+              }`}
+            >
+              Chế Độ Ngày
+            </button>
+            <button
+              onClick={() => setViewType('week')}
+              className={`py-1.5 px-3 rounded-lg transition-all cursor-pointer ${
+                viewType === 'week' ? 'bg-white text-blue-600 shadow-xs font-black' : 'hover:text-slate-800'
+              }`}
+            >
+              Chế Độ Tuần
+            </button>
+          </div>
+
+          {/* Instructor filter select dropdown */}
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+            <span className="text-[10px] font-extrabold uppercase text-slate-400 font-mono tracking-wider">Lọc Giáo Viên:</span>
+            <select
+              value={filterInstructorId}
+              onChange={(e) => setFilterInstructorId(e.target.value)}
+              className="bg-slate-50 border border-slate-200/80 rounded-xl py-1.5 px-3 text-xs text-slate-800 font-bold focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer shadow-xs min-w-[150px]"
+            >
+              <option value="all">Tất cả giáo viên</option>
+              {instructors.map((ins) => (
+                <option key={ins.id} value={ins.id}>
+                  {ins.name} ({ins.phone})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         {/* View selection tabs */}
-        <div className="flex bg-slate-50 p-1 rounded-2xl text-xs font-bold text-slate-500 overflow-x-auto w-full md:w-auto">
+        <div className="flex bg-slate-50 p-1 rounded-2xl text-xs font-bold text-slate-500 overflow-x-auto w-full xl:w-auto justify-center xl:justify-start">
           {[
             { id: 'list', label: 'Dạng danh sách' },
             { id: 'week', label: 'Lịch Tuần (Lưới)' },
@@ -778,7 +826,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-slate-700 font-bold">
-                {lessons
+                {displayedLessons
                   .filter(l => {
                     if (!searchQuery) return true;
                     const studentObj = students.find(s => s.id === l.studentId);
@@ -841,7 +889,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
 
           {/* MOBILE FRIENDLY LESSON CARDS STACK */}
           <div className="block md:hidden space-y-4">
-            {lessons
+            {displayedLessons
               .filter(l => {
                 if (!searchQuery) return true;
                 const studentObj = students.find(s => s.id === l.studentId);
@@ -857,13 +905,13 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
         <div className="bg-white rounded-3xl border border-slate-100 p-5 shadow-sm space-y-4">
           <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block">Sơ đồ bận rộn ngày: {new Date(selectedDate).toLocaleDateString('vi-VN')}</span>
           
-          {lessons.filter(l => l.date === selectedDate).length === 0 ? (
+          {displayedLessons.filter(l => l.date === selectedDate).length === 0 ? (
             <div className="p-10 text-center text-slate-400 text-xs">
               Không có chương trình bổ túc lái xe nào được xếp cho ngày này.
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {lessons
+              {displayedLessons
                 .filter(l => l.date === selectedDate)
                 .sort((a,b)=>a.startTime.localeCompare(b.startTime))
                 .map((les) => {
@@ -908,8 +956,10 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
           <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest block">Theo Giảng viên ngày {new Date(selectedDate).toLocaleDateString('vi-VN')}</span>
           
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {instructors.map((ins) => {
-              const insLessons = lessons.filter(l => l.date === selectedDate && l.instructorId === ins.id);
+            {instructors
+              .filter(ins => filterInstructorId === 'all' || ins.id === filterInstructorId)
+              .map((ins) => {
+                const insLessons = displayedLessons.filter(l => l.date === selectedDate && l.instructorId === ins.id);
               return (
                 <div key={ins.id} className="border border-slate-100 rounded-3xl p-4 bg-slate-50/50 space-y-3">
                   <div className="pb-2 border-b border-slate-100">
@@ -949,7 +999,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {vehicles.map((veh) => {
-              const vehLessons = lessons.filter(l => l.date === selectedDate && l.vehicleId === veh.id);
+              const vehLessons = displayedLessons.filter(l => l.date === selectedDate && l.vehicleId === veh.id);
               return (
                 <div key={veh.id} className="border border-slate-100 rounded-3xl p-4 bg-slate-50/55 space-y-3">
                   <div className="pb-2 border-b border-slate-100">
@@ -997,7 +1047,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
           };
         });
 
-        const allWeekLessons = lessons.filter(l => 
+        const allWeekLessons = displayedLessons.filter(l => 
           weekDays.some(wd => wd.dateStr === l.date)
         );
 

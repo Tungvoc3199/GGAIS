@@ -51,11 +51,12 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
   } = useDatabase();
 
   const showScheduleToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+    setLastSaveMessage(message);
     const toast = (window as any).__lhpToast;
     if (typeof toast === 'function') {
       toast(message, type);
     } else {
-      window.alert(message);
+      console[type === 'error' ? 'error' : 'log'](`[Schedule ${type}]`, message);
     }
   };
 
@@ -125,6 +126,8 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
   // Lesson Edit/Add Form states
   const [isBooking, setIsBooking] = useState(false);
   const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
+  const [isSavingLesson, setIsSavingLesson] = useState(false);
+  const [lastSaveMessage, setLastSaveMessage] = useState('');
 
   // Form Fields
   const [formStudentId, setFormStudentId] = useState('');
@@ -476,6 +479,8 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     setConflictAlternatives([]);
     setShowOverride(false);
     setOverrideReason('');
+    setLastSaveMessage('');
+    setIsSavingLesson(false);
     setIsBooking(true);
   };
 
@@ -500,76 +505,83 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     setConflictAlternatives([]);
     setShowOverride(false);
     setOverrideReason('');
+    setLastSaveMessage('');
+    setIsSavingLesson(false);
     setIsBooking(true);
   };
 
   // Submit hander with complex conflict validation rules
   const handleSaveLesson = async (e: React.FormEvent, isOverride = false) => {
     e.preventDefault();
-
-    const selectedStudent = students.find(s => s.id === formStudentId);
-    const safeInstructorId = getCompatibleInstructorId(selectedStudent, formInstructorId);
-    const safeVehicleId = getCompatibleVehicleId(selectedStudent, formVehicleId);
-
-    if (!formStudentId || !safeInstructorId || !safeVehicleId) {
-      const message = 'Không tìm thấy đủ học viên, giảng viên hoặc xe hợp lệ để xếp lịch. Vui lòng kiểm tra dữ liệu giảng viên/xe.';
-      setConflictWarning([message]);
-      showScheduleToast(message, 'error');
-      return;
-    }
-
-    setFormInstructorId(safeInstructorId);
-    setFormVehicleId(safeVehicleId);
-
-    const payload = {
-      id: editingLessonId || undefined,
-      studentId: formStudentId,
-      instructorId: safeInstructorId,
-      vehicleId: safeVehicleId,
-      date: formDate,
-      startTime: formStart,
-      endTime: formEnd,
-      lessonType: formType,
-      pickupLocation: formPickup,
-      trainingLocation: formTraining,
-      notes: isOverride ? `${formNotes} [Mực ghi cưỡng chế: ${overrideReason}]` : formNotes,
-      status: formStatus,
-      attendanceStatus: formAttendance,
-      resultNote: formResult
-    };
-
-    // Verify overlays/conflicts unless they approved override
-    if (!isOverride) {
-      const check = checkLessonConflicts(payload, lessons, instructors, vehicles, settings, students);
-      if (check.hasConflict) {
-        setConflictWarning(check.reasons);
-        setShowOverride(true);
-
-        // Fetch Suggested Slots based on actual duration calculated from formStart and formEnd
-        const startMin = formStart.split(':').map(Number);
-        const endMin = formEnd.split(':').map(Number);
-        const calculatedDuration = (endMin[0] * 60 + endMin[1]) - (startMin[0] * 60 + startMin[1]);
-        const finalDuration = calculatedDuration > 0 ? calculatedDuration : 120;
-
-        const options = suggestAvailableSlots(
-          {
-            studentId: formStudentId,
-            instructorId: formInstructorId,
-            vehicleId: formVehicleId,
-            date: formDate,
-            duration: finalDuration // minutes
-          },
-          lessons,
-          instructors,
-          vehicles,
-          settings
-        );
-        setConflictAlternatives(options);
-        return; // Halt save
-      }
-    }
+    setLastSaveMessage('');
+    setIsSavingLesson(true);
 
     try {
+      const selectedStudent = students.find(s => s.id === formStudentId);
+      const safeInstructorId = getCompatibleInstructorId(selectedStudent, formInstructorId);
+      const safeVehicleId = getCompatibleVehicleId(selectedStudent, formVehicleId);
+
+      if (!formStudentId || !safeInstructorId || !safeVehicleId) {
+        const message = 'Không tìm thấy đủ học viên, giảng viên hoặc xe hợp lệ để xếp lịch. Vui lòng kiểm tra dữ liệu giảng viên/xe.';
+        setConflictWarning([message]);
+        showScheduleToast(message, 'error');
+        setIsSavingLesson(false);
+        return;
+      }
+
+      setFormInstructorId(safeInstructorId);
+      setFormVehicleId(safeVehicleId);
+
+      const payload = {
+        id: editingLessonId || undefined,
+        studentId: formStudentId,
+        instructorId: safeInstructorId,
+        vehicleId: safeVehicleId,
+        date: formDate,
+        startTime: formStart,
+        endTime: formEnd,
+        lessonType: formType,
+        pickupLocation: formPickup,
+        trainingLocation: formTraining,
+        notes: isOverride ? `${formNotes} [Mực ghi cưỡng chế: ${overrideReason}]` : formNotes,
+        status: formStatus,
+        attendanceStatus: formAttendance,
+        resultNote: formResult
+      };
+
+      // Verify overlays/conflicts unless they approved override
+      if (!isOverride) {
+        const check = checkLessonConflicts(payload, lessons, instructors, vehicles, settings, students);
+        if (check.hasConflict) {
+          setConflictWarning(check.reasons);
+          setShowOverride(true);
+
+          // Fetch Suggested Slots based on actual duration calculated from formStart and formEnd
+          const startMin = formStart.split(':').map(Number);
+          const endMin = formEnd.split(':').map(Number);
+          const calculatedDuration = (endMin[0] * 60 + endMin[1]) - (startMin[0] * 60 + startMin[1]);
+          const finalDuration = calculatedDuration > 0 ? calculatedDuration : 120;
+
+          const options = suggestAvailableSlots(
+            {
+              studentId: formStudentId,
+              instructorId: safeInstructorId,
+              vehicleId: safeVehicleId,
+              date: formDate,
+              duration: finalDuration // minutes
+            },
+            lessons,
+            instructors,
+            vehicles,
+            settings
+          );
+          setConflictAlternatives(options);
+          showScheduleToast('Hệ thống phát hiện xung đột lịch học. Vui lòng xem khung cảnh báo màu đỏ trong form.', 'warning');
+          setIsSavingLesson(false);
+          return; // Halt save
+        }
+      }
+
       const result = editingLessonId
         ? await updateLesson(editingLessonId, payload)
         : await addLesson(payload);
@@ -598,6 +610,8 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
       setConflictWarning([message]);
       setShowOverride(false);
       showScheduleToast(message, 'error');
+    } finally {
+      setIsSavingLesson(false);
     }
   };
 
@@ -1365,6 +1379,11 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                 )}
 
                 {/* Form Buttons */}
+                {lastSaveMessage && (
+                  <div className="text-[11px] font-bold rounded-xl bg-slate-50 border border-slate-200 text-slate-700 px-3 py-2 mb-2">
+                    {lastSaveMessage}
+                  </div>
+                )}
                 <div className="pt-3 border-t border-slate-100 flex gap-2.5 justify-between">
                   {editingLessonId && currentUser?.role !== 'Instructor' && (
                     <button
@@ -1385,8 +1404,9 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                   <div className="flex gap-2 ml-auto">
                     <button
                       type="button"
+                      disabled={isSavingLesson}
                       onClick={() => setIsBooking(false)}
-                      className="bg-slate-100 text-slate-700 hover:bg-slate-200 py-2.5 px-4 rounded-xl cursor-pointer"
+                      className="bg-slate-100 text-slate-700 hover:bg-slate-200 py-2.5 px-4 rounded-xl cursor-pointer disabled:opacity-50"
                     >
                       QUAY LẠI
                     </button>
@@ -1394,9 +1414,10 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
                     {!showOverride && (
                       <button
                         type="submit"
-                        className="bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-xs transition-all"
+                        disabled={isSavingLesson}
+                        className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-400 disabled:cursor-not-allowed text-white py-2.5 px-5 rounded-xl cursor-pointer shadow-xs transition-all"
                       >
-                        ✓ GHI LẠI LỊCH DẠY
+                        {isSavingLesson ? 'ĐANG LƯU LỊCH...' : '✓ GHI LẠI LỊCH DẠY'}
                       </button>
                     )}
                   </div>

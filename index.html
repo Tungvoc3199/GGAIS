@@ -177,6 +177,57 @@
         window.alert = (message) => {
           window.__lhpToast(message);
         };
+
+        const isLessonBookingForm = (form) => {
+          const text = (form?.textContent || '').toLowerCase();
+          return text.includes('học viên *') &&
+            text.includes('giảng viên *') &&
+            text.includes('xe tập lái *') &&
+            text.includes('ghi lại lịch dạy');
+        };
+
+        const hydrateVisibleSelectDefaults = (form) => {
+          if (!form || !isLessonBookingForm(form)) return 0;
+          let fixed = 0;
+          const selects = Array.from(form.querySelectorAll('select'));
+          selects.slice(0, 3).forEach((select) => {
+            if (!select.value && select.options && select.options.length > 0) {
+              const firstRealOption = Array.from(select.options).find((opt) => !opt.disabled && opt.value);
+              if (firstRealOption) {
+                select.value = firstRealOption.value;
+                select.dispatchEvent(new Event('input', { bubbles: true }));
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                fixed += 1;
+              }
+            }
+          });
+          return fixed;
+        };
+
+        document.addEventListener('click', (event) => {
+          const target = event.target;
+          const button = target && target.closest ? target.closest('button') : null;
+          if (!button || String(button.textContent || '').toLowerCase().indexOf('ghi lại lịch dạy') === -1) return;
+          const form = button.closest('form');
+          hydrateVisibleSelectDefaults(form);
+        }, true);
+
+        document.addEventListener('submit', (event) => {
+          const form = event.target;
+          if (!isLessonBookingForm(form)) return;
+          const fixed = hydrateVisibleSelectDefaults(form);
+          if (fixed > 0 && form.dataset.lhpHydratedOnce !== 'true') {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            form.dataset.lhpHydratedOnce = 'true';
+            window.__lhpToast('Đã đồng bộ lại lựa chọn học viên, giảng viên và xe. Đang lưu lại lịch học...', 'success');
+            window.setTimeout(() => {
+              const submitButton = Array.from(form.querySelectorAll('button')).find((btn) => String(btn.textContent || '').toLowerCase().includes('ghi lại lịch dạy'));
+              if (form.requestSubmit && submitButton) form.requestSubmit(submitButton);
+              else if (form.requestSubmit) form.requestSubmit();
+            }, 80);
+          }
+        }, true);
       })();
     </script>
     <script type="module" src="/src/main.tsx"></script>

@@ -50,6 +50,15 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     deleteLesson
   } = useDatabase();
 
+  const showScheduleToast = (message: string, type: 'success' | 'error' | 'warning' = 'success') => {
+    const toast = (window as any).__lhpToast;
+    if (typeof toast === 'function') {
+      toast(message, type);
+    } else {
+      window.alert(message);
+    }
+  };
+
   // Calendar Views: 'list' | 'day' | 'week' | 'month' | 'resource_instructor' | 'resource_vehicle'
   const [viewType, setViewType] = useState<'list' | 'day' | 'week' | 'month' | 'by_instructor' | 'by_vehicle'>('list');
   const getTodayString = () => {
@@ -433,7 +442,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
   };
 
   // Submit hander with complex conflict validation rules
-  const handleSaveLesson = (e: React.FormEvent, isOverride = false) => {
+  const handleSaveLesson = async (e: React.FormEvent, isOverride = false) => {
     e.preventDefault();
 
     if (!formStudentId || !formInstructorId || !formVehicleId) {
@@ -489,13 +498,36 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
       }
     }
 
-    if (editingLessonId) {
-      updateLesson(editingLessonId, payload);
-    } else {
-      addLesson(payload);
-    }
+    try {
+      const result = editingLessonId
+        ? await updateLesson(editingLessonId, payload)
+        : await addLesson(payload);
 
-    setIsBooking(false);
+      if (!result?.success) {
+        const message = result?.error || 'Không thể lưu lịch học. Vui lòng kiểm tra lại dữ liệu hoặc quyền truy cập.';
+        setConflictWarning([message]);
+        setShowOverride(false);
+        showScheduleToast(message, 'error');
+        return;
+      }
+
+      setConflictWarning([]);
+      setConflictAlternatives([]);
+      setShowOverride(false);
+      setOverrideReason('');
+      setSelectedDate(payload.date);
+      setViewType('day');
+      setIsBooking(false);
+      showScheduleToast(
+        `Đã lưu lịch học ngày ${payload.date} từ ${payload.startTime} đến ${payload.endTime}.`,
+        'success'
+      );
+    } catch (err: any) {
+      const message = err?.message || 'Lỗi không xác định khi lưu lịch học.';
+      setConflictWarning([message]);
+      setShowOverride(false);
+      showScheduleToast(message, 'error');
+    }
   };
 
   // Drag and drop demo helper (Move tomorrow)

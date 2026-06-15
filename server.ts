@@ -1450,6 +1450,38 @@ async function startServer() {
     }
   });
 
+const ACTIVE_VEHICLE_OPERATION_STATUSES = new Set([
+  "",
+  "Sẵn sàng",
+  "Đang hoạt động",
+  "Hoạt động",
+  "Hoạt động bình thường",
+  "Sẵn sàng vận hành",
+  "Available",
+  "Active"
+]);
+
+const INACTIVE_VEHICLE_STATUS_KEYWORDS = [
+  "bảo dưỡng",
+  "sửa",
+  "hỏng",
+  "ngừng",
+  "không hoạt động",
+  "khóa",
+  "đã bán"
+];
+
+function isVehicleOperational(status: any): boolean {
+  const value = String(status || "").trim();
+  const lower = value.toLowerCase();
+
+  if (INACTIVE_VEHICLE_STATUS_KEYWORDS.some(keyword => lower.includes(keyword))) {
+    return false;
+  }
+
+  return ACTIVE_VEHICLE_OPERATION_STATUSES.has(value) || !value;
+}
+
   app.post("/api/lessons/create", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
     if (!["Admin", "Staff"].includes(user.role)) {
@@ -1480,8 +1512,10 @@ async function startServer() {
       }
 
       // 1. Check vehicle availability
-      if (vehicle.status !== "Sẵn sàng" && override !== "true") {
-        return res.status(400).json({ error: `Xe tập lái hiện trạng thái '${vehicle.status}' không khả dụng xếp lịch.` });
+      if (!isVehicleOperational(vehicle.status) && override !== "true") {
+        return res.status(400).json({
+          error: `Xe tập lái ${vehicle.name || ""} (${vehicle.plate || ""}) chưa đủ điều kiện vận hành để xếp lịch. Trạng thái hiện tại: ${vehicle.status || "Chưa khai báo"}.`
+        });
       }
 
       // 2. Instructor working Day

@@ -8,6 +8,8 @@ import { Lesson, Instructor, Vehicle, AppSettings, Student, LessonType } from '.
 export type ScheduleSuggestion = { date: string; startTime: string; endTime: string };
 
 const CANCELLED_LESSON_STATUSES = new Set(['Học viên báo nghỉ', 'Giảng viên báo nghỉ', 'Hủy lịch']);
+const ACTIVE_VEHICLE_STATUSES = new Set(['', 'Sẵn sàng', 'Đang hoạt động', 'Hoạt động', 'Available', 'Active']);
+const INACTIVE_VEHICLE_KEYWORDS = ['bảo dưỡng', 'sửa', 'hỏng', 'ngừng', 'không hoạt động', 'khóa', 'đã bán'];
 
 function isActiveLesson(lesson: Pick<Lesson, 'status'>): boolean {
   return !CANCELLED_LESSON_STATUSES.has(lesson.status);
@@ -71,10 +73,7 @@ export function normalizeDateInput(date: string): string | null {
   }
 
   const parsed = new Date(raw);
-  if (!Number.isNaN(parsed.getTime())) {
-    return dateToYmd(parsed);
-  }
-
+  if (!Number.isNaN(parsed.getTime())) return dateToYmd(parsed);
   return null;
 }
 
@@ -110,17 +109,23 @@ function normalizeDuration(duration: number, settings?: AppSettings): number {
   return settings?.defaultLessonDuration || allowed[0] || 120;
 }
 
-/**
- * Converts a time string "HH:mm" into minutes since start of day.
- */
+function getVehicleStatus(vehicle: Vehicle | undefined): string {
+  return String(vehicle?.status || '').trim();
+}
+
+function isVehicleSchedulable(vehicle: Vehicle | undefined): boolean {
+  if (!vehicle) return false;
+  const status = getVehicleStatus(vehicle);
+  const lowered = status.toLowerCase();
+  if (INACTIVE_VEHICLE_KEYWORDS.some(keyword => lowered.includes(keyword))) return false;
+  return ACTIVE_VEHICLE_STATUSES.has(status) || !status;
+}
+
 export function timeToMinutes(time: string): number {
   const [h, m] = time.split(':').map(Number);
   return h * 60 + m;
 }
 
-/**
- * Converts minutes since start of day back to a static "HH:mm" string.
- */
 export function minutesToTime(minutes: number): string {
   const safeMinutes = Math.max(0, Math.min(23 * 60 + 59, minutes));
   const h = Math.floor(safeMinutes / 60);
@@ -128,9 +133,6 @@ export function minutesToTime(minutes: number): string {
   return `${pad2(h)}:${pad2(m)}`;
 }
 
-/**
- * Determines if two time intervals overlap.
- */
 export function doIntervalsOverlap(
   start1: string, end1: string,
   start2: string, end2: string
@@ -154,7 +156,7 @@ function isInstructorCompatible(instructor: Instructor | undefined, student: Stu
 
 function isVehicleCompatible(vehicle: Vehicle | undefined, student: Student | undefined): boolean {
   if (!vehicle || !student) return false;
-  if (vehicle.status !== 'Sẵn sàng') return false;
+  if (!isVehicleSchedulable(vehicle)) return false;
   if (vehicle.suitableLicenseClass && vehicle.suitableLicenseClass !== student.licenseClass) return false;
   if (student.licenseClass === 'B số tự động') return vehicle.transmission === 'Số tự động';
   if (student.licenseClass === 'B số sàn' || student.licenseClass === 'C1') return vehicle.transmission === 'Số sàn';
@@ -182,10 +184,6 @@ function buildLessonType(student: Student): LessonType {
   return 'Sa hình';
 }
 
-/**
- * Checks for scheduling conflicts for student, instructor, vehicle, working hours,
- * training compatibility and daily lesson limits.
- */
 export function checkLessonConflicts(
   newLesson: {
     studentId: string;
@@ -243,15 +241,9 @@ export function checkLessonConflicts(
   const maxDayLessons = Math.max(1, settings?.autoSchedulingRules?.maxLessonsPerStudentPerDay || 1);
 
   if (student) {
-    if (student.status === 'Tạm dừng') {
-      reasons.push(`Học viên ${student.name} đang tạm dừng, không nên xếp lịch mới.`);
-    }
-    if (student.status === 'Đã hoàn thành' || student.status === 'Đã thi') {
-      reasons.push(`Học viên ${student.name} đã ở trạng thái ${student.status}, cần kiểm tra trước khi xếp thêm lịch.`);
-    }
-    if ((student.remainingSessions ?? 0) <= 0) {
-      reasons.push(`Học viên ${student.name} đã hết số buổi còn lại trong gói học.`);
-    }
+    if (student.status === 'Tạm dừng') reasons.push(`Học viên ${student.name} đang tạm dừng, không nên xếp lịch mới.`);
+    if (student.status === 'Đã hoàn thành' || student.status === 'Đã thi') reasons.push(`Học viên ${student.name} đã ở trạng thái ${student.status}, cần kiểm tra trước khi xếp thêm lịch.`);
+    if ((student.remainingSessions ?? 0) <= 0) reasons.push(`Học viên ${student.name} đã hết số buổi còn lại trong gói học.`);
   }
 
   if (!teacher) {
@@ -282,8 +274,8 @@ export function checkLessonConflicts(
 
   if (!car) {
     reasons.push('Không tìm thấy thông tin xe tập lái được chọn.');
-  } else if (car.status !== 'Sẵn sàng') {
-    reasons.push(`Xe tập ${car.name} (${car.plate}) đang ở trạng thái: ${car.status}.`);
+  } else if (!isVehicleSchedulable(car)) {
+    reasons.push(`Xe tập ${car.name} (${car.plate}) chưa sẵn sàng để xếp lịch. Trạng thái hiện tại: ${getVehicleStatus(car) || 'Chưa khai báo'}.`);
   }
 
   if (student && teacher && !teacher.vehicleTypes.includes(student.licenseClass)) {
@@ -324,7 +316,6 @@ export function checkLessonConflicts(
     const itemEndM = timeToMinutes(lesson.endTime);
     const overlap = startM < itemEndM && itemStartM < endM;
     const bufferOverlap = buffer > 0 && startM < itemEndM + buffer && itemStartM - buffer < endM;
-
     if (!overlap && !bufferOverlap) continue;
 
     if (lesson.studentId === newLesson.studentId) {
@@ -349,9 +340,6 @@ export function checkLessonConflicts(
   };
 }
 
-/**
- * Suggests the next available slots if a conflict occurs.
- */
 export function suggestAvailableSlots(
   request: {
     studentId: string;
@@ -371,16 +359,16 @@ export function suggestAvailableSlots(
   const startMinutes = timeToMinutes(schoolHours.start);
   const endMinutes = timeToMinutes(schoolHours.end);
   const duration = normalizeDuration(request.duration, settings);
-
-  let currentDay = parseLocalYmd(request.date) || new Date();
+  const currentDay = parseLocalYmd(request.date) || new Date();
 
   for (let d = 0; d < 14; d++) {
-    const dayStr = dateToYmd(currentDay);
+    const loopDay = new Date(currentDay);
+    loopDay.setDate(currentDay.getDate() + d);
+    const dayStr = dateToYmd(loopDay);
 
     for (let min = startMinutes; min + duration <= endMinutes; min += 30) {
       const candStart = minutesToTime(min);
       const candEnd = minutesToTime(min + duration);
-
       const check = checkLessonConflicts(
         {
           studentId: request.studentId,
@@ -402,17 +390,11 @@ export function suggestAvailableSlots(
         if (suggestions.length >= 5) return suggestions;
       }
     }
-
-    currentDay.setDate(currentDay.getDate() + 1);
   }
 
   return suggestions;
 }
 
-/**
- * Reusable Auto-Scheduling Wizard Engine.
- * Prioritizes students with fewer completed lessons and allocates compatible instructor/vehicle slots.
- */
 export function runAutoSchedulingEngine(
   params: {
     studentIds: string[];
@@ -502,13 +484,10 @@ export function runAutoSchedulingEngine(
       loopDateObj.setDate(dateStartObj.getDate() + dayOffset);
       const loopDateStr = dateToYmd(loopDateObj);
       const dayOfWeek = loopDateObj.getDay();
-
       if (params.preferredDays.length > 0 && !params.preferredDays.includes(dayOfWeek)) continue;
 
       const schoolHours = getSchoolHours(settings);
-      const timeRanges = params.preferredTimeRanges.length > 0
-        ? params.preferredTimeRanges
-        : [{ start: schoolHours.start, end: schoolHours.end }];
+      const timeRanges = params.preferredTimeRanges.length > 0 ? params.preferredTimeRanges : [{ start: schoolHours.start, end: schoolHours.end }];
 
       for (const range of timeRanges) {
         if (found) break;
@@ -619,9 +598,6 @@ export function runAutoSchedulingEngine(
   return { success: true, suggestions };
 }
 
-/**
- * Lists the free slots of the day classified by Instructor or Vehicle.
- */
 export function getFreeSlotsReport(
   date: string,
   instructorId: string,
@@ -642,8 +618,8 @@ export function getFreeSlotsReport(
   for (let m = minStart; m + duration <= minEnd; m += 30) {
     const startStr = minutesToTime(m);
     const endStr = minutesToTime(m + duration);
-
     let isReserved = false;
+
     for (const les of existingLessons) {
       if (!isActiveLesson(les)) continue;
       if (normalizeDateInput(les.date) !== normalizedDate) continue;
@@ -658,12 +634,7 @@ export function getFreeSlotsReport(
       let segment = 'Sáng';
       if (m >= 720 && m < 1020) segment = 'Chiều';
       else if (m >= 1020) segment = 'Tối';
-
-      freeSlots.push({
-        startTime: startStr,
-        endTime: endStr,
-        label: `${startStr} - ${endStr} (${segment})`
-      });
+      freeSlots.push({ startTime: startStr, endTime: endStr, label: `${startStr} - ${endStr} (${segment})` });
     }
   }
 

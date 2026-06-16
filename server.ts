@@ -1482,6 +1482,16 @@ function isVehicleOperational(status: any): boolean {
   return ACTIVE_VEHICLE_OPERATION_STATUSES.has(value) || !value;
 }
 
+function isInstructorOperational(instructor: any): boolean {
+  const status = String(instructor?.status || '').trim().toLowerCase();
+  if (instructor?.active === false) return false;
+
+  const blockedKeywords = ['tạm nghỉ', 'nghỉ việc', 'ngừng', 'không hoạt động', 'khóa'];
+  if (blockedKeywords.some(k => status.includes(k))) return false;
+
+  return true;
+}
+
   app.post("/api/lessons/create", checkAuth, async (req, res) => {
     const user = req.currentUserProfile;
     if (!["Admin", "Staff"].includes(user.role)) {
@@ -1503,13 +1513,26 @@ function isVehicleOperational(status: any): boolean {
       let instructorSnap = await adminDb.collection("instructors").doc(finalInstructorId).get();
       if (instructorSnap.exists) {
         instructor = instructorSnap.data() || {};
+        if (!isInstructorOperational(instructor) && override !== "true") {
+          return res.status(400).json({
+            error: `Giáo viên ${instructor.name || "được chọn"} hiện tại không hoạt động hoặc tạm nghỉ.`
+          });
+        }
+        if (!(instructor.vehicleTypes || []).includes(student.licenseClass) && override !== "true") {
+          return res.status(400).json({
+            error: `Giáo viên ${instructor.name || "được chọn"} không có hạng xe phù hợp (${student.licenseClass}). Bằng của giảng viên: ${(instructor.vehicleTypes || []).join(", ")}.`
+          });
+        }
       } else {
         // Fallback for instructor
         if (student.assignedInstructorId) {
           const assignedSnap = await adminDb.collection("instructors").doc(student.assignedInstructorId).get();
           if (assignedSnap.exists) {
-            finalInstructorId = student.assignedInstructorId;
-            instructor = assignedSnap.data();
+            const data = assignedSnap.data();
+            if (isInstructorOperational(data)) {
+              finalInstructorId = student.assignedInstructorId;
+              instructor = data;
+            }
           }
         }
         if (!instructor) {
@@ -1519,8 +1542,7 @@ function isVehicleOperational(status: any): boolean {
             instructorsSnapshot.forEach(doc => {
               const data = doc.data();
               if (
-                data.active !== false &&
-                (!data.status || data.status === "Đang dạy") &&
+                isInstructorOperational(data) &&
                 (data.vehicleTypes || []).includes(student.licenseClass)
               ) {
                 candidates.push({ id: doc.id, ...data });

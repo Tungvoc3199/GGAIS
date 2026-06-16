@@ -527,6 +527,14 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     setIsSavingLesson(true);
     setLastSaveMessage('Đang kiểm tra và lưu lịch học...');
 
+    if (!formStudentId || !formInstructorId || !formVehicleId) {
+      const message = 'Vui lòng chọn đầy đủ học viên, giảng viên và xe tập lái.';
+      setConflictWarning([message]);
+      showScheduleToast(message, 'error');
+      setIsSavingLesson(false);
+      return;
+    }
+
     if (!formDate || !formStart || !formEnd) {
       const message = 'Vui lòng nhập đầy đủ ngày học, giờ bắt đầu và giờ kết thúc.';
       setConflictWarning([message]);

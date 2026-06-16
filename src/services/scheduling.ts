@@ -41,6 +41,47 @@ interface ConflictResult {
   reasons: string[];
 }
 
+function isInstructorOperational(instructor: any): boolean {
+  const status = String(instructor?.status || '').trim().toLowerCase();
+  if (instructor?.active === false) return false;
+
+  const blockedKeywords = ['tạm nghỉ', 'nghỉ việc', 'ngừng', 'không hoạt động', 'khóa'];
+  if (blockedKeywords.some(k => status.includes(k))) return false;
+
+  return true;
+}
+
+function isVehicleOperational(status: any): boolean {
+  const value = String(status || "").trim();
+  const lower = value.toLowerCase();
+
+  const inactiveKeywords = [
+    "bảo dưỡng",
+    "sửa",
+    "hỏng",
+    "ngừng",
+    "không hoạt động",
+    "khóa",
+    "đã bán"
+  ];
+
+  if (inactiveKeywords.some(keyword => lower.includes(keyword))) {
+    return false;
+  }
+
+  const activeStatuses = new Set([
+    "Đang hoạt động",
+    "Hoạt động",
+    "Hoạt động bình thường",
+    "Sẵn sàng",
+    "Sẵn sàng vận hành",
+    "Available",
+    "Active"
+  ]);
+
+  return activeStatuses.has(value) || !value;
+}
+
 /**
  * Checks for any scheduling overlaps for student, instructor, or vehicle.
  */
@@ -79,8 +120,12 @@ export function checkLessonConflicts(
   // 1. Check constraints against holidays/working hours
   const teacher = instructors.find(i => i.id === newLesson.instructorId);
   if (teacher) {
+    if (!isInstructorOperational(teacher)) {
+      reasons.push(`Giảng viên ${teacher.name} không ở trạng thái hoạt động hoặc tạm nghỉ.`);
+    }
+
     // Check if within working hours
-    const teachHours = teacher.workingHours || { start: '07:00', end: '18:00' };
+    const teachHours = teacher.workingHours || { start: '07:00', end: '21:00' };
     const teachStart = timeToMinutes(teachHours.start);
     const teachEnd = timeToMinutes(teachHours.end);
 
@@ -91,15 +136,15 @@ export function checkLessonConflicts(
     }
 
     // Check if teacher has this day off
-    if (teacher.daysOff.includes(newLesson.date)) {
+    if (teacher.daysOff && teacher.daysOff.includes(newLesson.date)) {
       reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${newLesson.date}.`);
     }
   }
 
   // Check vehicle status
   const car = vehicles.find(v => v.id === newLesson.vehicleId);
-  if (car && car.status !== 'Sẵn sàng') {
-    reasons.push(`Xe tập ${car.name} (${car.plate}) đang ở trạng thái: ${car.status}.`);
+  if (car && !isVehicleOperational(car.status)) {
+    reasons.push(`Xe tập ${car.name} (${car.plate}) chưa đủ điều kiện vận hành. Trạng thái hiện tại: ${car.status || "Chưa khai báo"}.`);
   }
 
   if (student) {

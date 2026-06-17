@@ -733,22 +733,24 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateStudent = async (id: string, updated: Partial<Student>): Promise<{ success: boolean; error?: string }> => {
-    const sObj = students.find(s => s.id === id);
-    if (!sObj) {
-      return { success: false, error: 'Không tìm thấy học viên trong hệ thống.' };
-    }
-
-    const mergedStudent = { ...sObj, ...updated };
-    mergedStudent.remainingAmount = Math.max(0, mergedStudent.totalFee - mergedStudent.paidAmount);
-    mergedStudent.remainingSessions = Math.max(0, mergedStudent.totalSessions - mergedStudent.completedSessions);
-
     if (isFirebase) {
       try {
         const docFields: any = { studentId: id };
         let hasDocs = false;
-        if (updated.avatarImage !== undefined) { docFields.avatarImage = updated.avatarImage; hasDocs = true; }
-        if (updated.cccdStoragePath !== undefined) { docFields.cccdStoragePath = updated.cccdStoragePath; hasDocs = true; }
-        if (updated.eidStoragePath !== undefined) { docFields.eidStoragePath = updated.eidStoragePath; hasDocs = true; }
+
+        if (updated.avatarImage !== undefined) {
+          docFields.avatarImage = updated.avatarImage;
+          hasDocs = true;
+        }
+        if (updated.cccdStoragePath !== undefined) {
+          docFields.cccdStoragePath = updated.cccdStoragePath;
+          hasDocs = true;
+        }
+        if (updated.eidStoragePath !== undefined) {
+          docFields.eidStoragePath = updated.eidStoragePath;
+          hasDocs = true;
+        }
+
         if (hasDocs) {
           await authFetch('/api/students/update-documents', {
             method: 'POST',
@@ -769,23 +771,43 @@ export const DatabaseProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             body: JSON.stringify(textFields)
           });
         }
+
         await loadFirestoreData();
+
+        setStudents(prev => prev.map(s => {
+          if (s.id !== id) return s;
+          const mergedStudent = { ...s, ...updated };
+          mergedStudent.remainingAmount = Math.max(0, mergedStudent.totalFee - mergedStudent.paidAmount);
+          mergedStudent.remainingSessions = Math.max(0, mergedStudent.totalSessions - mergedStudent.completedSessions);
+          return mergedStudent;
+        }));
+
+        return { success: true };
       } catch (err: any) {
         console.error('Lỗi updateStudent API:', err);
-        return { success: false, error: 'Lỗi lưu dữ liệu lên Cloud Backend: ' + (err.message || String(err)) };
+        return {
+          success: false,
+          error: 'Lỗi lưu dữ liệu lên Cloud Backend: ' + (err.message || String(err))
+        };
       }
     }
 
-    setStudents(prev => prev.map(s => {
-      if (s.id === id) {
-        return mergedStudent;
-      }
-      return s;
-    }));
-
-    if (!isFirebase) {
-      await addAuditLog('Sửa hồ sơ học viên', `Chỉnh sửa thông tin cốt lõi của học viên ${mergedStudent.name}. Các trường tác động: ${Object.keys(updated).join(', ')}.`);
+    const sObj = students.find(s => s.id === id);
+    if (!sObj) {
+      return { success: false, error: 'Không tìm thấy học viên trong hệ thống.' };
     }
+
+    const mergedStudent = { ...sObj, ...updated };
+    mergedStudent.remainingAmount = Math.max(0, mergedStudent.totalFee - mergedStudent.paidAmount);
+    mergedStudent.remainingSessions = Math.max(0, mergedStudent.totalSessions - mergedStudent.completedSessions);
+
+    setStudents(prev => prev.map(s => s.id === id ? mergedStudent : s));
+
+    await addAuditLog(
+      'Sửa hồ sơ học viên',
+      `Chỉnh sửa thông tin cốt lõi của học viên ${mergedStudent.name}. Các trường tác động: ${Object.keys(updated).join(', ')}.`
+    );
+
     return { success: true };
   };
 

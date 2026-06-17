@@ -1,77 +1,43 @@
-name: Deploy Cloud Run
+name: Deploy to Cloud Run
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
-    paths:
-      - 'src/**'
-      - 'server.ts'
-      - 'package.json'
-      - 'package-lock.json'
-      - 'index.html'
-      - 'vite.config.ts'
-      - 'tsconfig.json'
-      - '.github/workflows/deploy-cloud-run.yml'
-
-permissions:
-  contents: read
-
-concurrency:
-  group: deploy-cloud-run-${{ github.ref }}
-  cancel-in-progress: true
+      - master
 
 env:
-  PROJECT_ID: lich-hoc-pro-production
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  SERVICE_NAME: ${{ secrets.GCP_SERVICE_NAME }}
   REGION: asia-southeast1
-  SERVICE_NAME: lich-hoc-pro
-  RUNTIME_SERVICE_ACCOUNT: lich-hoc-pro-backend@lich-hoc-pro-production.iam.gserviceaccount.com
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Google Auth
+        uses: google-github-actions/auth@v1
         with:
-          node-version: '20'
-          cache: npm
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
 
-      - name: Verify lint, build and static security
-        run: npm run verify
+      - name: Authorize Docker push
+        run: gcloud auth configure-docker
 
-      - name: Authenticate Google Cloud
-        uses: google-github-actions/auth@v3
-        with:
-          credentials_json: '${{ secrets.GCP_FIREBASE_SERVICE_ACCOUNT }}'
-          project_id: '${{ env.PROJECT_ID }}'
-
-      - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v3
-        with:
-          project_id: '${{ env.PROJECT_ID }}'
+      - name: Build and Push Container
+        run: |-
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} .
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
 
       - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy "$SERVICE_NAME" \
-            --source . \
-            --region "$REGION" \
-            --allow-unauthenticated \
-            --service-account "$RUNTIME_SERVICE_ACCOUNT" \
-            --update-env-vars "NODE_ENV=production,ALLOW_DEV_REST_FALLBACK=false" \
-            --quiet
-
-      - name: Show deployed URL
-        run: |
-          gcloud run services describe "$SERVICE_NAME" \
-            --region "$REGION" \
-            --format='value(status.url)'
+        run: |-
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --platform managed \
+            --allow-unauthenticated

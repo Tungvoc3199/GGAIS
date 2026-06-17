@@ -566,7 +566,7 @@ export const Students: React.FC<StudentsProps> = ({
         });
       } catch (addErr: any) {
         console.error('Lỗi thêm học viên:', addErr);
-        alert(`Đăng ký học viên thất bại: ${addErr.message || String(addErr)}`);
+        alert('Đăng ký học viên thất bại, chưa ghi được dữ liệu.');
         setIsCreatingStudent(false);
         return;
       }
@@ -578,6 +578,9 @@ export const Students: React.FC<StudentsProps> = ({
       const uploadedPaths: string[] = [];
 
       if (isFirebase) {
+        let uploadFailed = false;
+        let updateFailed = false;
+
         try {
           if (cccdFile) {
             const res = await uploadStudentDocument(realStudentId, 'cccd', cccdFile);
@@ -594,20 +597,9 @@ export const Students: React.FC<StudentsProps> = ({
             finalAvatarImage = res.downloadUrl || '';
             if (res.storagePath) uploadedPaths.push(res.storagePath);
           }
-
-          // Sau khi upload thành công toàn bộ, cập nhật lại học viên với đường dẫn/avatar URL bằng API updateStudent
-          if (uploadedPaths.length > 0) {
-            const updateRes = await updateStudent(realStudentId, {
-              avatarImage: finalAvatarImage,
-              cccdStoragePath: finalCccdPath,
-              eidStoragePath: finalEidPath
-            });
-            if (!updateRes.success) {
-              throw new Error(updateRes.error || 'Cập nhật tài liệu học viên thất bại.');
-            }
-          }
         } catch (uploadErr: any) {
-          console.error('Lỗi xử lý file hoặc cập nhật, tiến hành dọn dẹp file mồ côi:', uploadErr);
+          console.error('Lỗi xử lý file:', uploadErr);
+          uploadFailed = true;
           if (uploadedPaths.length > 0) {
             for (const path of uploadedPaths) {
               try {
@@ -618,15 +610,30 @@ export const Students: React.FC<StudentsProps> = ({
               }
             }
           }
-          // Xóa học viên đã tạo rỗng thông tin đính kèm
+        }
+
+        if (!uploadFailed && uploadedPaths.length > 0) {
           try {
-            await deleteStudent(realStudentId);
-          } catch (delStudErr) {
-            console.error('Lỗi xóa học viên sau khi tải file thất bại:', delStudErr);
+            const updateRes = await updateStudent(realStudentId, {
+              avatarImage: finalAvatarImage,
+              cccdStoragePath: finalCccdPath,
+              eidStoragePath: finalEidPath
+            });
+            if (!updateRes.success) {
+              updateFailed = true;
+            }
+          } catch (updErr) {
+            console.error('Lỗi cập nhật hồ sơ:', updErr);
+            updateFailed = true;
           }
-          alert(`Đăng ký học viên thất bại do xử lý tài liệu đính kèm lỗi: ${uploadErr.message || String(uploadErr)}.`);
-          setIsCreatingStudent(false);
-          return;
+        }
+
+        if (uploadFailed) {
+          alert('Học viên đã tạo, nhưng tài liệu chưa upload được.');
+          alert('Học viên đã được tạo thành công, nhưng tài liệu đính kèm chưa cập nhật được. Vui lòng mở hồ sơ học viên và tải lại CCCD/eID/avatar.');
+        } else if (updateFailed) {
+          alert('Học viên và file đã tạo, nhưng chưa gắn được đường dẫn tài liệu vào hồ sơ.');
+          alert('Học viên đã được tạo thành công, nhưng tài liệu đính kèm chưa cập nhật được. Vui lòng mở hồ sơ học viên và tải lại CCCD/eID/avatar.');
         }
       }
 

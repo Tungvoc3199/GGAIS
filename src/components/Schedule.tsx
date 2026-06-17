@@ -148,7 +148,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
   const [formPickup, setFormPickup] = useState('15 Tôn Thất Thuyết');
   const [formTraining, setFormTraining] = useState('Bãi tập Tây Mỗ');
   const [formNotes, setFormNotes] = useState('');
-  const [formStatus, setFormStatus] = useState<LessonStatus>('Chờ xác nhận');
+  const [formStatus, setFormStatus] = useState<LessonStatus>('Đã xác nhận');
   const [formAttendance, setFormAttendance] = useState<AttendanceStatus>('Chưa điểm danh');
   const [formResult, setFormResult] = useState('');
 
@@ -480,7 +480,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
     setFormEnd('10:00');
     setFormType('Sa hình');
     setFormNotes('');
-    setFormStatus('Chờ xác nhận');
+    setFormStatus('Đã xác nhận');
     setFormAttendance('Chưa điểm danh');
     setFormResult('');
     setConflictWarning([]);
@@ -722,7 +722,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
             className="bg-blue-600 hover:bg-blue-700 font-bold text-xs text-white px-4 py-3.5 rounded-2xl cursor-pointer shadow-sm flex items-center gap-1.5 transition-all self-start sm:self-auto uppercase"
           >
             <Plus className="h-5 w-5" />
-            XẾP LỊCH TRỰC TIẾP
+            XẾP LỊCH THỦ CÔNG
           </button>
         </div>
       </div>
@@ -1227,7 +1227,7 @@ export const Schedule: React.FC<ScheduleProps> = ({ quickFormOpen, onCloseQuickF
             
             <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50 shrink-0">
               <h2 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-1.5">
-                <CalendarIcon className="h-5 w-5 text-blue-600" /> {editingLessonId ? 'CẬP NHẬT LỊCH HỌC' : 'XẾP LỊCH HỌC TRỰC TIẾP'}
+                <CalendarIcon className="h-5 w-5 text-blue-600" /> {editingLessonId ? 'CẬP NHẬT LỊCH HỌC' : 'XẾP LỊCH HỌC THỦ CÔNG'}
               </h2>
               <button
                 onClick={() => setIsBooking(false)}

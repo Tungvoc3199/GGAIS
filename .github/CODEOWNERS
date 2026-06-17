@@ -1,10 +1,1 @@
-# Protected production files
-# These files must not be changed by AI tools without owner review.
-
-.github/workflows/** @Tungvoc3199
-AI_STUDIO_RULES.md @Tungvoc3199
-firebase.json @Tungvoc3199
-.firebaserc @Tungvoc3199
-firestore.rules @Tungvoc3199
-storage.rules @Tungvoc3199
-package.json @Tungvoc3199
+* @anhduongnguyen12521

@@ -5,11 +5,36 @@
 
 import { Lesson, Instructor, Vehicle, AppSettings, Student } from '../types';
 
+const INACTIVE_LESSON_STATUSES = new Set([
+  'Học viên báo nghỉ',
+  'Giảng viên báo nghỉ',
+  'Hủy lịch'
+]);
+
+interface ConflictResult {
+  hasConflict: boolean;
+  reasons: string[];
+}
+
+interface ConflictCheckOptions {
+  /**
+   * Manual booking must only block real overlapping time.
+   * Auto scheduling can turn this on to reserve the safety gap between lessons.
+   */
+  enforceSafetyBuffer?: boolean;
+  /**
+   * Manual booking is allowed to place multiple lessons in one day when staff decides so.
+   * Auto scheduling can turn this on to avoid overbooking students automatically.
+   */
+  enforceStudentDailyLimit?: boolean;
+}
+
 /**
  * Converts a time string "HH:mm" into minutes since start of day.
  */
 export function timeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map(Number);
+  const [h, m] = String(time || '').split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return Number.NaN;
   return h * 60 + m;
 }
 
@@ -17,8 +42,9 @@ export function timeToMinutes(time: string): number {
  * Converts minutes since start of day back to a static "HH:mm" string.
  */
 export function minutesToTime(minutes: number): string {
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
+  const safeMinutes = Math.max(0, Math.floor(minutes));
+  const h = Math.floor(safeMinutes / 60);
+  const m = safeMinutes % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
@@ -33,12 +59,8 @@ export function doIntervalsOverlap(
   const e1 = timeToMinutes(end1);
   const s2 = timeToMinutes(start2);
   const e2 = timeToMinutes(end2);
+  if (![s1, e1, s2, e2].every(Number.isFinite)) return false;
   return s1 < e2 && s2 < e1;
-}
-
-interface ConflictResult {
-  hasConflict: boolean;
-  reasons: string[];
 }
 
 function isInstructorOperational(instructor: any): boolean {
@@ -52,17 +74,17 @@ function isInstructorOperational(instructor: any): boolean {
 }
 
 function isVehicleOperational(status: any): boolean {
-  const value = String(status || "").trim();
+  const value = String(status || '').trim();
   const lower = value.toLowerCase();
 
   const inactiveKeywords = [
-    "bảo dưỡng",
-    "sửa",
-    "hỏng",
-    "ngừng",
-    "không hoạt động",
-    "khóa",
-    "đã bán"
+    'bảo dưỡng',
+    'sửa',
+    'hỏng',
+    'ngừng',
+    'không hoạt động',
+    'khóa',
+    'đã bán'
   ];
 
   if (inactiveKeywords.some(keyword => lower.includes(keyword))) {
@@ -70,20 +92,31 @@ function isVehicleOperational(status: any): boolean {
   }
 
   const activeStatuses = new Set([
-    "Đang hoạt động",
-    "Hoạt động",
-    "Hoạt động bình thường",
-    "Sẵn sàng",
-    "Sẵn sàng vận hành",
-    "Available",
-    "Active"
+    'Đang hoạt động',
+    'Hoạt động',
+    'Hoạt động bình thường',
+    'Sẵn sàng',
+    'Sẵn sàng vận hành',
+    'Available',
+    'Active'
   ]);
 
   return activeStatuses.has(value) || !value;
 }
 
+function isCancelledLesson(lesson: Lesson): boolean {
+  return INACTIVE_LESSON_STATUSES.has(lesson.status);
+}
+
 /**
- * Checks for any scheduling overlaps for student, instructor, or vehicle.
+ * Checks for schedule conflicts.
+ *
+ * Default mode is manual booking:
+ * - block real overlap only;
+ * - do not block safety buffer;
+ * - do not block the student daily lesson limit.
+ *
+ * Auto scheduling must opt in through options.
  */
 export function checkLessonConflicts(
   newLesson: {
@@ -93,138 +126,132 @@ export function checkLessonConflicts(
     date: string;
     startTime: string;
     endTime: string;
-    id?: string; // Optional if we are editing an existing lesson
+    id?: string;
   },
   existingLessons: Lesson[],
   instructors: Instructor[],
   vehicles: Vehicle[],
   settings?: AppSettings,
-  students?: Student[]
+  students?: Student[],
+  options: ConflictCheckOptions = {}
 ): ConflictResult {
   const reasons: string[] = [];
-  const start = newLesson.startTime;
-  const end = newLesson.endTime;
-  const startM = timeToMinutes(start);
-  const endM = timeToMinutes(end);
+  const startM = timeToMinutes(newLesson.startTime);
+  const endM = timeToMinutes(newLesson.endTime);
 
-  // Validate basic operational constraints
-  if (endM <= startM) {
+  if (!Number.isFinite(startM) || !Number.isFinite(endM) || endM <= startM) {
     reasons.push('Giờ kết thúc phải lớn hơn giờ bắt đầu.');
     return { hasConflict: true, reasons };
   }
 
-  const student = students?.find(s => s.id === newLesson.studentId);
-  const buffer = settings?.autoSchedulingRules?.safetyBufferMinutes || 0;
+  const enforceSafetyBuffer = options.enforceSafetyBuffer === true;
+  const enforceStudentDailyLimit = options.enforceStudentDailyLimit === true;
+  const buffer = enforceSafetyBuffer
+    ? settings?.autoSchedulingRules?.safetyBufferMinutes || 0
+    : 0;
   const maxDayLessons = settings?.autoSchedulingRules?.maxLessonsPerStudentPerDay || 1;
 
-  // 1. Check constraints against holidays/working hours
+  const student = students?.find(s => s.id === newLesson.studentId);
   const teacher = instructors.find(i => i.id === newLesson.instructorId);
+  const car = vehicles.find(v => v.id === newLesson.vehicleId);
+
   if (teacher) {
     if (!isInstructorOperational(teacher)) {
       reasons.push(`Giảng viên ${teacher.name} không ở trạng thái hoạt động hoặc tạm nghỉ.`);
     }
 
-    // Check if within working hours
     const teachHours = teacher.workingHours || { start: '07:00', end: '21:00' };
     const teachStart = timeToMinutes(teachHours.start);
     const teachEnd = timeToMinutes(teachHours.end);
 
-    if (startM < teachStart || endM > teachEnd) {
-      reasons.push(
-        `Ngoài khung giờ làm việc của GV ${teacher.name} (${teachHours.start} - ${teachHours.end})`
-      );
+    if (Number.isFinite(teachStart) && Number.isFinite(teachEnd) && (startM < teachStart || endM > teachEnd)) {
+      reasons.push(`Ngoài khung giờ làm việc của GV ${teacher.name} (${teachHours.start} - ${teachHours.end})`);
     }
 
-    // Check if teacher has this day off
     if (teacher.daysOff && teacher.daysOff.includes(newLesson.date)) {
       reasons.push(`Giảng viên ${teacher.name} đang nghỉ phép vào ngày ${newLesson.date}.`);
     }
   }
 
-  // Check vehicle status
-  const car = vehicles.find(v => v.id === newLesson.vehicleId);
   if (car && !isVehicleOperational(car.status)) {
-    reasons.push(`Xe tập ${car.name} (${car.plate}) chưa đủ điều kiện vận hành. Trạng thái hiện tại: ${car.status || "Chưa khai báo"}.`);
+    reasons.push(`Xe tập ${car.name} (${car.plate}) chưa đủ điều kiện vận hành. Trạng thái hiện tại: ${car.status || 'Chưa khai báo'}.`);
   }
 
   if (student) {
-    // Max lessons limit per day per student
-    const studentLessonsOnDay = existingLessons.filter(l => 
-      l.studentId === newLesson.studentId && 
-      l.date === newLesson.date &&
-      l.id !== newLesson.id &&
-      l.status !== 'Học viên báo nghỉ' && 
-      l.status !== 'Giảng viên báo nghỉ' && 
-      l.status !== 'Hủy lịch'
-    ).length;
+    if (enforceStudentDailyLimit) {
+      const studentLessonsOnDay = existingLessons.filter(l =>
+        l.studentId === newLesson.studentId &&
+        l.date === newLesson.date &&
+        l.id !== newLesson.id &&
+        !isCancelledLesson(l)
+      ).length;
 
-    if (studentLessonsOnDay >= maxDayLessons) {
-      reasons.push(`Học viên ${student.name} đã đăng ký học tối đa ${maxDayLessons} ca trong ngày ${newLesson.date}.`);
+      if (studentLessonsOnDay >= maxDayLessons) {
+        reasons.push(`Học viên ${student.name} đã đăng ký học tối đa ${maxDayLessons} ca trong ngày ${newLesson.date}.`);
+      }
     }
 
-    // Instructor license compatibility
     if (teacher && !teacher.vehicleTypes.includes(student.licenseClass)) {
       reasons.push(`Hạng bằng học viên (${student.licenseClass}) nằm ngoài phân loại có tuyển của giảng viên ${teacher.name} (${teacher.vehicleTypes.join(', ')}).`);
     }
 
-    // Vehicle license & transmission compatibility
     if (car) {
       if (car.suitableLicenseClass && car.suitableLicenseClass !== student.licenseClass) {
         reasons.push(`Xe tập ${car.name} (${car.plate}) chỉ phù hợp đào tạo hạng ${car.suitableLicenseClass}, học viên ký hạng ${student.licenseClass}.`);
       }
 
       if (student.licenseClass === 'B số tự động' && car.transmission !== 'Số tự động') {
-        reasons.push(`Học viên học hạng B số tự động (B1) không được xếp tập trên xe Số sàn (Manual).`);
+        reasons.push('Học viên học hạng B số tự động không được xếp tập trên xe Số sàn.');
       } else if ((student.licenseClass === 'B số sàn' || student.licenseClass === 'C1') && car.transmission !== 'Số sàn') {
-        reasons.push(`Học viên học hạng ${student.licenseClass} không được xếp tập trên xe Số tự động (Automatic).`);
+        reasons.push(`Học viên học hạng ${student.licenseClass} không được xếp tập trên xe Số tự động.`);
       }
     }
   }
 
-  // 2. Overlap and Safety buffer checks
   for (const lesson of existingLessons) {
-    if (lesson.id === newLesson.id) continue; // Skip itself if editing
-    // Cancelled lessons do not hold slots
-    if (lesson.status === 'Học viên báo nghỉ' || lesson.status === 'Giảng viên báo nghỉ' || lesson.status === 'Hủy lịch') {
+    if (lesson.id === newLesson.id || isCancelledLesson(lesson) || lesson.date !== newLesson.date) {
       continue;
     }
 
-    if (lesson.date === newLesson.date) {
-      const itemStartM = timeToMinutes(lesson.startTime);
-      const itemEndM = timeToMinutes(lesson.endTime);
-      
-      const overlap = startM < itemEndM && itemStartM < endM;
-      const bufferOverlap = startM < itemEndM + buffer && itemStartM - buffer < endM;
+    const itemStartM = timeToMinutes(lesson.startTime);
+    const itemEndM = timeToMinutes(lesson.endTime);
+    if (!Number.isFinite(itemStartM) || !Number.isFinite(itemEndM)) {
+      continue;
+    }
 
-      if (bufferOverlap) {
-        if (lesson.studentId === newLesson.studentId) {
-          if (overlap) {
-            reasons.push(`Học viên đã bận lịch học khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
-          } else {
-            reasons.push(`Khoảng nghỉ của học viên giữa các ca chưa đạt thiết lập tối thiểu ${buffer} phút (${lesson.startTime} - ${lesson.endTime}).`);
-          }
-        }
-        if (lesson.instructorId === newLesson.instructorId) {
-          if (overlap) {
-            reasons.push(`Giảng viên bận dạy lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
-          } else {
-            reasons.push(`Giảng viên kẹt mốc thời gian nghỉ tối thiểu ${buffer} phút với ca dạy kề nhau (${lesson.startTime} - ${lesson.endTime}).`);
-          }
-        }
-        if (lesson.vehicleId === newLesson.vehicleId) {
-          if (overlap) {
-            reasons.push(`Xe tập lái (${car?.plate || 'Phân công'}) đã bận phục vụ lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`);
-          } else {
-            reasons.push(`Xe tập lái cần khoảng nghỉ tối thiểu ${buffer} phút trước ca tiếp theo (${lesson.startTime} - ${lesson.endTime}).`);
-          }
-        }
-      }
+    const overlap = startM < itemEndM && itemStartM < endM;
+    const bufferOverlap = startM < itemEndM + buffer && itemStartM - buffer < endM;
+
+    if (!bufferOverlap) continue;
+
+    if (lesson.studentId === newLesson.studentId) {
+      reasons.push(
+        overlap
+          ? `Học viên đã bận lịch học khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`
+          : `Khoảng nghỉ của học viên giữa các ca chưa đạt thiết lập tối thiểu ${buffer} phút (${lesson.startTime} - ${lesson.endTime}).`
+      );
+    }
+
+    if (lesson.instructorId === newLesson.instructorId) {
+      reasons.push(
+        overlap
+          ? `Giảng viên bận dạy lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`
+          : `Giảng viên kẹt mốc thời gian nghỉ tối thiểu ${buffer} phút với ca dạy kề nhau (${lesson.startTime} - ${lesson.endTime}).`
+      );
+    }
+
+    if (lesson.vehicleId === newLesson.vehicleId) {
+      reasons.push(
+        overlap
+          ? `Xe tập lái (${car?.plate || 'Phân công'}) đã bận phục vụ lịch khác trùng giờ (${lesson.startTime} - ${lesson.endTime}).`
+          : `Xe tập lái cần khoảng nghỉ tối thiểu ${buffer} phút trước ca tiếp theo (${lesson.startTime} - ${lesson.endTime}).`
+      );
     }
   }
 
   return {
     hasConflict: reasons.length > 0,
-    reasons
+    reasons: [...new Set(reasons)]
   };
 }
 
@@ -237,26 +264,29 @@ export function suggestAvailableSlots(
     instructorId: string;
     vehicleId: string;
     date: string;
-    duration: number; // minutes
+    duration: number;
   },
   existingLessons: Lesson[],
   instructors: Instructor[],
   vehicles: Vehicle[],
-  settings: AppSettings
+  settings: AppSettings,
+  students?: Student[],
+  options: ConflictCheckOptions = {}
 ): { date: string; startTime: string; endTime: string }[] {
   const suggestions: { date: string; startTime: string; endTime: string }[] = [];
   const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
   const startMinutes = timeToMinutes(schoolHours.start);
   const endMinutes = timeToMinutes(schoolHours.end);
 
-  let currentDay = new Date(request.date);
+  if (!Number.isFinite(startMinutes) || !Number.isFinite(endMinutes) || request.duration <= 0) {
+    return suggestions;
+  }
 
-  // Search up to 7 days into the future
+  const currentDay = new Date(request.date);
+
   for (let d = 0; d < 7; d++) {
-    // Format date as yyyy-MM-dd
     const dayStr = currentDay.toISOString().split('T')[0];
 
-    // Try multiple start times inside working hours (e.g., every 30 mins)
     for (let min = startMinutes; min + request.duration <= endMinutes; min += 30) {
       const candStart = minutesToTime(min);
       const candEnd = minutesToTime(min + request.duration);
@@ -272,23 +302,18 @@ export function suggestAvailableSlots(
         },
         existingLessons,
         instructors,
-        vehicles
+        vehicles,
+        settings,
+        students,
+        options
       );
 
       if (!check.hasConflict) {
-        suggestions.push({
-          date: dayStr,
-          startTime: candStart,
-          endTime: candEnd
-        });
-
-        if (suggestions.length >= 3) {
-          return suggestions;
-        }
+        suggestions.push({ date: dayStr, startTime: candStart, endTime: candEnd });
+        if (suggestions.length >= 3) return suggestions;
       }
     }
 
-    // Step to next day
     currentDay.setDate(currentDay.getDate() + 1);
   }
 
@@ -296,19 +321,19 @@ export function suggestAvailableSlots(
 }
 
 /**
- * Reusable Auto-Scheduling Wizard Engine
- * Prioritizes students who have not learned recently or whose exam date is approaching.
+ * Reusable Auto-Scheduling Wizard Engine.
+ * Auto mode explicitly enforces safety buffer and daily lesson limits.
  */
 export function runAutoSchedulingEngine(
   params: {
     studentIds: string[];
     startDate: string;
     endDate: string;
-    duration: number; // minutes
-    preferredDays: number[]; // weekdays (0 = Sunday, 1 = Monday ...)
+    duration: number;
+    preferredDays: number[];
     preferredTimeRanges: { start: string; end: string }[];
-    instructorPref: string; // "auto" or spec ID
-    vehiclePref: string; // "auto" or spec ID
+    instructorPref: string;
+    vehiclePref: string;
   },
   students: Student[],
   existingLessons: Lesson[],
@@ -318,7 +343,7 @@ export function runAutoSchedulingEngine(
 ): {
   success: boolean;
   suggestions: {
-    id: string; // temporary random id for view list
+    id: string;
     studentId: string;
     instructorId: string;
     vehicleId: string;
@@ -329,15 +354,28 @@ export function runAutoSchedulingEngine(
     warnings: string[];
   }[];
 } {
-  const suggestions: any[] = [];
+  const suggestions: {
+    id: string;
+    studentId: string;
+    instructorId: string;
+    vehicleId: string;
+    date: string;
+    startTime: string;
+    endTime: string;
+    lessonType: 'Sa hình' | 'Đường trường cơ bản' | 'Làm quen xe';
+    warnings: string[];
+  }[] = [];
 
-  // Sort students by priority
-  // 1. Prioritize students with fewer completed lessons
+  const autoConflictOptions: ConflictCheckOptions = {
+    enforceSafetyBuffer: true,
+    enforceStudentDailyLimit: true
+  };
+
   const sortedStudentIds = [...params.studentIds].sort((aId, bId) => {
     const sA = students.find(s => s.id === aId);
     const sB = students.find(s => s.id === bId);
     if (!sA || !sB) return 0;
-    return sA.completedSessions - sB.completedSessions; // Ascending (fewer lessons first)
+    return sA.completedSessions - sB.completedSessions;
   });
 
   const tempArrLessons = [...existingLessons];
@@ -346,22 +384,19 @@ export function runAutoSchedulingEngine(
     const studentObj = students.find(s => s.id === studId);
     if (!studentObj) continue;
 
-    // Pick Instructor & vehicle
     let teacherId = params.instructorPref;
     if (teacherId === 'auto') {
-      teacherId = studentObj.assignedInstructorId || instructors[0]?.id;
+      teacherId = studentObj.assignedInstructorId || instructors[0]?.id || '';
     }
 
     let carId = params.vehiclePref;
     if (carId === 'auto') {
-      carId = studentObj.assignedVehicleId || vehicles[0]?.id;
+      carId = studentObj.assignedVehicleId || vehicles[0]?.id || '';
     }
 
-    // Begin date scanning
     let found = false;
     const dateStartObj = new Date(params.startDate);
     const dateEndObj = new Date(params.endDate);
-
     const checkLimitDays = Math.ceil((dateEndObj.getTime() - dateStartObj.getTime()) / (1000 * 60 * 60 * 24)) + 1;
 
     for (let dayOffset = 0; dayOffset < checkLimitDays; dayOffset++) {
@@ -369,14 +404,12 @@ export function runAutoSchedulingEngine(
       loopDateObj.setDate(loopDateObj.getDate() + dayOffset);
       const loopDateStr = loopDateObj.toISOString().split('T')[0];
 
-      // Check if day is preferred
-      let dayOfWeek = loopDateObj.getDay(); // 0 = Sun
-      if (dayOfWeek === 0) dayOfWeek = 7; // Match with standard Việt working days
+      let dayOfWeek = loopDateObj.getDay();
+      if (dayOfWeek === 0) dayOfWeek = 7;
       if (params.preferredDays.length > 0 && !params.preferredDays.includes(dayOfWeek)) {
         continue;
       }
 
-      // Try preferred time windows
       const schoolHours = settings?.workingHours || { start: '07:00', end: '18:00' };
       const timeRanges = params.preferredTimeRanges.length > 0
         ? params.preferredTimeRanges
@@ -385,8 +418,8 @@ export function runAutoSchedulingEngine(
       for (const range of timeRanges) {
         const earliestMin = timeToMinutes(range.start);
         const latestMin = timeToMinutes(range.end);
+        if (!Number.isFinite(earliestMin) || !Number.isFinite(latestMin)) continue;
 
-        // Scan windows
         for (let tMin = earliestMin; tMin + params.duration <= latestMin; tMin += 30) {
           const candStart = minutesToTime(tMin);
           const candEnd = minutesToTime(tMin + params.duration);
@@ -402,11 +435,13 @@ export function runAutoSchedulingEngine(
             },
             tempArrLessons,
             instructors,
-            vehicles
+            vehicles,
+            settings,
+            students,
+            autoConflictOptions
           );
 
           if (!conflictCheck.hasConflict) {
-            // Suggesting this slot!
             const newSug = {
               id: `sug_${Math.random().toString(36).substr(2, 9)}`,
               studentId: studId,
@@ -415,13 +450,11 @@ export function runAutoSchedulingEngine(
               date: loopDateStr,
               startTime: candStart,
               endTime: candEnd,
-              lessonType: (studentObj.licenseClass.includes('B') ? 'Sa hình' : 'Làm quen xe') as any,
+              lessonType: (studentObj.licenseClass.includes('B') ? 'Sa hình' : 'Làm quen xe') as 'Sa hình' | 'Đường trường cơ bản' | 'Làm quen xe',
               warnings: []
             };
 
             suggestions.push(newSug);
-
-            // Add to simulated pool so subsequent students won't book on same slot
             tempArrLessons.push({
               id: newSug.id,
               ...newSug,
@@ -431,7 +464,7 @@ export function runAutoSchedulingEngine(
               resultNote: '',
               pickupLocation: studentObj.address,
               trainingLocation: 'Bãi tập Trung tâm'
-            });
+            } as Lesson);
 
             found = true;
             break;
@@ -439,12 +472,10 @@ export function runAutoSchedulingEngine(
         }
         if (found) break;
       }
-      if (found) break; // One lesson per student in this batch
+      if (found) break;
     }
 
     if (!found) {
-      // In case we could not automatically find ANY slot inside chosen dates/parameters
-      // We will search next three free times for manual preview override
       const altOptions = suggestAvailableSlots(
         {
           studentId: studId,
@@ -456,7 +487,9 @@ export function runAutoSchedulingEngine(
         tempArrLessons,
         instructors,
         vehicles,
-        settings
+        settings,
+        students,
+        autoConflictOptions
       );
 
       suggestions.push({
@@ -491,7 +524,7 @@ export function getFreeSlotsReport(
   date: string,
   instructorId: string,
   vehicleId: string,
-  durationMinutes: number, // e.g. 60, 90, 120
+  durationMinutes: number,
   existingLessons: Lesson[],
   settings: AppSettings
 ): { startTime: string; endTime: string; label: string }[] {
@@ -500,25 +533,23 @@ export function getFreeSlotsReport(
   const minEnd = timeToMinutes(schoolHours.end);
   const freeSlots: { startTime: string; endTime: string; label: string }[] = [];
 
+  if (!Number.isFinite(minStart) || !Number.isFinite(minEnd) || durationMinutes <= 0) {
+    return freeSlots;
+  }
+
   for (let m = minStart; m + durationMinutes <= minEnd; m += 30) {
     const startStr = minutesToTime(m);
     const endStr = minutesToTime(m + durationMinutes);
 
-    // See if the slot overlaps with any reserved schedules for this date
     let isReserved = false;
     for (const les of existingLessons) {
-      if (les.status === 'Học viên báo nghỉ' || les.status === 'Giảng viên báo nghỉ' || les.status === 'Hủy lịch') {
-        continue;
-      }
-      if (les.date === date) {
-        // Overlaps?
-        const overlaps = doIntervalsOverlap(startStr, endStr, les.startTime, les.endTime);
-        if (overlaps) {
-          if (les.instructorId === instructorId || les.vehicleId === vehicleId) {
-            isReserved = true;
-            break;
-          }
-        }
+      if (isCancelledLesson(les)) continue;
+      if (les.date !== date) continue;
+
+      const overlaps = doIntervalsOverlap(startStr, endStr, les.startTime, les.endTime);
+      if (overlaps && (les.instructorId === instructorId || les.vehicleId === vehicleId)) {
+        isReserved = true;
+        break;
       }
     }
 

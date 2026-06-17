@@ -28,7 +28,7 @@ export async function uploadStudentDocument(
   if (!auth.currentUser) {
     throw new Error('Bạn cần đăng nhập Cloud trước khi tải ảnh lên.');
   }
-  // Standardize file.type or fall back based on file extension
+
   let contentType = file.type;
   if (contentType === 'image/jpg') {
     contentType = 'image/jpeg';
@@ -48,14 +48,21 @@ export async function uploadStudentDocument(
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(studentId)) {
     throw new Error('Mã học viên không hợp lệ.');
   }
+
   const safeName = sanitizeFileName(file.name || `${kind}.jpg`);
+
+  // storage.rules expects: students/{studentId}/{kind}/{fileName}
+  // Previous path used students/{studentId}/{kind}_{fileName}, so it did not
+  // match the secured rule block and Firebase Storage returned unauthorized.
   const fileRef = ref(
     storage,
-    `students/${studentId}/${kind}_${safeName}`
+    `students/${studentId}/${kind}/${kind}_${Date.now()}_${safeName}`
   );
+
   await uploadBytes(fileRef, file, {
-    contentType: contentType
+    contentType
   });
+
   if (kind === 'avatar') {
     const downloadUrl = await getDownloadURL(fileRef);
     return { storagePath: fileRef.fullPath, downloadUrl };

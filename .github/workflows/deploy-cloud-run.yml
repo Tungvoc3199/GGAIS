@@ -67,7 +67,7 @@ jobs:
             --region "$REGION" \
             --allow-unauthenticated \
             --service-account "$RUNTIME_SERVICE_ACCOUNT" \
-            --set-env-vars "NODE_ENV=production,ALLOW_DEV_REST_FALLBACK=false" \
+            --update-env-vars "NODE_ENV=production,ALLOW_DEV_REST_FALLBACK=false" \
             --quiet
 
       - name: Show deployed URL

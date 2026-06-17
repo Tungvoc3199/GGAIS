@@ -47,7 +47,10 @@ jobs:
         run: npm ci
 
       - name: Verify lint, build and static security
-        run: npm run verify
+        run: |
+          npm run lint
+          npm run build
+          npm run verify:static
 
       - name: Authenticate Google Cloud
         uses: google-github-actions/auth@v3

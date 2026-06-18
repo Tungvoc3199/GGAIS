@@ -44,6 +44,8 @@ const safeNumber = (value: unknown, fallback = 0): number => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const normalizeText = (value: unknown): string => String(value || '').toLowerCase().trim();
+
 const toMinutes = (time: string): number => {
   const [h, m] = String(time || '00:00').split(':').map(Number);
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : 0;
@@ -67,6 +69,20 @@ const dateRange = (from: string, to: string): string[] => {
 
 const isActiveLesson = (lesson: Lesson) => lesson.status !== 'Hủy lịch' && lesson.status !== 'Học viên báo nghỉ' && lesson.status !== 'Giảng viên báo nghỉ';
 
+const isInstructorSchedulable = (instructor: Instructor) => {
+  const rawActive = (instructor as any).active;
+  if (rawActive === false) return false;
+  const status = normalizeText((instructor as any).status || (instructor as any).teachingStatus || (instructor as any).state);
+  if (!status) return true;
+  return !['nghỉ', 'nghi', 'tạm ngưng', 'tam ngung', 'ngừng', 'ngung', 'khóa', 'khoa', 'inactive', 'không hoạt động', 'khong hoat dong'].some(blocked => status.includes(blocked));
+};
+
+const isVehicleSchedulable = (vehicle: Vehicle) => {
+  const status = normalizeText(vehicle.status);
+  if (!status) return true;
+  return !['bảo dưỡng', 'bao duong', 'tạm ngưng', 'tam ngung', 'ngừng', 'ngung', 'hỏng', 'hong', 'inactive'].some(blocked => status.includes(blocked));
+};
+
 const overlaps = (aStart: string, aEnd: string, bStart: string, bEnd: string) => {
   const as = toMinutes(aStart);
   const ae = toMinutes(aEnd);
@@ -82,16 +98,20 @@ const sameDayCount = (studentId: string, date: string, lessons: Lesson[], drafts
 };
 
 const licenseMatchesInstructor = (student: Student, instructor: Instructor) => {
-  if (!instructor.active) return false;
+  if (!isInstructorSchedulable(instructor)) return false;
   if (!instructor.vehicleTypes || instructor.vehicleTypes.length === 0) return true;
+  const allowed = instructor.vehicleTypes.map(t => normalizeText(t)).join(' ');
+  const license = normalizeText(student.licenseClass);
+  if (license.includes('b')) return allowed.includes('b') || allowed.includes('số tự động') || allowed.includes('số sàn') || allowed.includes('tu dong') || allowed.includes('so san');
+  if (license.includes('c1') || license.includes('c')) return allowed.includes('c1') || allowed.includes('c');
   return instructor.vehicleTypes.includes(student.licenseClass);
 };
 
 const licenseMatchesVehicle = (student: Student, vehicle: Vehicle) => {
-  if (vehicle.status !== 'Sẵn sàng' && vehicle.status !== 'Đang sử dụng') return false;
-  const hint = `${vehicle.suitableLicenseClass || ''} ${vehicle.category || ''} ${vehicle.name || ''}`.toLowerCase();
-  if (student.licenseClass === 'B số tự động') return vehicle.transmission === 'Số tự động' || hint.includes('b');
-  if (student.licenseClass === 'B số sàn') return vehicle.transmission === 'Số sàn' || hint.includes('b');
+  if (!isVehicleSchedulable(vehicle)) return false;
+  const hint = `${vehicle.suitableLicenseClass || ''} ${vehicle.category || ''} ${vehicle.name || ''} ${vehicle.transmission || ''}`.toLowerCase();
+  if (student.licenseClass === 'B số tự động') return vehicle.transmission === 'Số tự động' || hint.includes('tự động') || hint.includes('tu dong') || hint.includes('at') || hint.includes('b');
+  if (student.licenseClass === 'B số sàn') return vehicle.transmission === 'Số sàn' || hint.includes('số sàn') || hint.includes('so san') || hint.includes('mt') || hint.includes('b');
   if (student.licenseClass === 'C1') return hint.includes('c1') || hint.includes('c');
   return true;
 };
@@ -208,6 +228,9 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
     [activeStudents, selectedStudentIds]
   );
 
+  const schedulableInstructors = useMemo(() => instructors.filter(isInstructorSchedulable), [instructors]);
+  const schedulableVehicles = useMemo(() => vehicles.filter(isVehicleSchedulable), [vehicles]);
+
   const strategyLabel = {
     balanced: 'Xếp đều',
     examPriority: 'Ưu tiên sắp thi',
@@ -234,6 +257,14 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
   const generateDraft = async () => {
     if (selectedStudents.length === 0) {
       await window.__lhpAlert?.({ title: 'Chưa chọn học viên', message: 'Vui lòng chọn ít nhất một học viên để tạo lịch nháp.', tone: 'warning' });
+      return;
+    }
+    if (schedulableInstructors.length === 0) {
+      await window.__lhpAlert?.({ title: 'Chưa có giảng viên hợp lệ', message: 'Không tìm thấy giảng viên đang hoạt động để xếp lịch. Vui lòng kiểm tra tab Giảng viên.', tone: 'warning' });
+      return;
+    }
+    if (schedulableVehicles.length === 0) {
+      await window.__lhpAlert?.({ title: 'Chưa có xe hợp lệ', message: 'Không tìm thấy xe đang hoạt động để xếp lịch. Vui lòng kiểm tra tab Xe tập lái.', tone: 'warning' });
       return;
     }
     if (new Date(startDate) > new Date(endDate)) {
@@ -263,8 +294,8 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
           if (currentCount >= targetCount) continue;
           if (sameDayCount(student.id, date, lessons, generated) >= maxPerDay) continue;
 
-          const instructorPool = instructors.filter(i => instructorPref === 'auto' ? licenseMatchesInstructor(student, i) : i.id === instructorPref && licenseMatchesInstructor(student, i));
-          const vehiclePool = vehicles.filter(v => vehiclePref === 'auto' ? licenseMatchesVehicle(student, v) : v.id === vehiclePref && licenseMatchesVehicle(student, v));
+          const instructorPool = schedulableInstructors.filter(i => instructorPref === 'auto' ? licenseMatchesInstructor(student, i) : i.id === instructorPref && licenseMatchesInstructor(student, i));
+          const vehiclePool = schedulableVehicles.filter(v => vehiclePref === 'auto' ? licenseMatchesVehicle(student, v) : v.id === vehiclePref && licenseMatchesVehicle(student, v));
 
           for (const instructor of instructorPool) {
             if (!isInstructorWorking(instructor, date, timeWindow.start, timeWindow.end)) continue;
@@ -312,7 +343,7 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
           studentName: student.name,
           reasons: [
             `Mới xếp được ${currentCount}/${targetCount} ca nháp`,
-            'Không còn khung giờ phù hợp hoặc giáo viên/xe/học viên bị trùng lịch',
+            'Không còn khung giờ phù hợp hoặc giảng viên/xe/học viên bị trùng lịch',
             'Hãy nới khoảng ngày, thêm khung giờ, đổi xe/giảng viên hoặc giảm số ca mỗi học viên'
           ]
         });
@@ -356,8 +387,8 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
             <div className="grid grid-cols-2 gap-3 text-xs font-bold">
               <label className="space-y-1"><span className="text-slate-400 uppercase text-[10px]">Từ ngày</span><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
               <label className="space-y-1"><span className="text-slate-400 uppercase text-[10px]">Đến ngày</span><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
-              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Giảng viên</span><select value={instructorPref} onChange={e => setInstructorPref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{instructors.filter(i => i.active).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
-              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Xe tập</span><select value={vehiclePref} onChange={e => setVehiclePref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{vehicles.filter(v => v.status !== 'Bảo dưỡng' && v.status !== 'Tạm ngưng').map(v => <option key={v.id} value={v.id}>{v.name} - {v.plate}</option>)}</select></label>
+              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Giảng viên</span><select value={instructorPref} onChange={e => setInstructorPref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{schedulableInstructors.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
+              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Xe tập</span><select value={vehiclePref} onChange={e => setVehiclePref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{schedulableVehicles.map(v => <option key={v.id} value={v.id}>{v.name} - {v.plate}</option>)}</select></label>
               <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Số ca / học viên trong lượt nháp</span><input type="number" min={1} max={7} value={sessionsPerStudent} onChange={e => setSessionsPerStudent(safeNumber(e.target.value, 1))} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
             </div>
           </div>

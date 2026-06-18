@@ -1,7 +1,23 @@
 import fs from 'node:fs';
 
-const file = 'src/components/Students.tsx';
-if (!fs.existsSync(file)) {
-  throw new Error('[patch-dat-ledger] Students.tsx not found');
+const f = 'src/App.tsx';
+let s = fs.readFileSync(f, 'utf8');
+let changed = false;
+
+if (!s.includes("./components/DatManagement")) {
+  s = s.replace("import { Settings } from './components/Settings';", "import { Settings } from './components/Settings';\nimport { DatManagement } from './components/DatManagement';");
+  changed = true;
 }
-console.log('[patch-dat-ledger] DAT ledger patch hook ready.');
+
+if (!s.includes("{ id: 'dat'")) {
+  s = s.replace("{ id: 'xe-tap', label: 'Xe tập lái', icon: Car },", "{ id: 'xe-tap', label: 'Xe tập lái', icon: Car },\n    { id: 'dat', label: 'DAT', icon: Gauge },");
+  changed = true;
+}
+
+if (!s.includes("activeView === 'dat'")) {
+  s = s.replace("{activeView === 'cai-dat' && <Settings />}", "{activeView === 'dat' && <DatManagement />}\n          {activeView === 'cai-dat' && <Settings />}");
+  changed = true;
+}
+
+if (changed) fs.writeFileSync(f, s);
+console.log('[patch-dat-ledger] DAT route connected=' + changed);

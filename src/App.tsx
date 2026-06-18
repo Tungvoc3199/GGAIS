@@ -15,6 +15,7 @@ import { Instructors } from './components/Instructors';
 import { Vehicles } from './components/Vehicles';
 import { Reports } from './components/Reports';
 import { Settings } from './components/Settings';
+import { DatManagement } from './components/DatManagement';
 
 import {
   Home,
@@ -23,6 +24,7 @@ import {
   DollarSign,
   Award,
   Car,
+  Gauge,
   FileSpreadsheet,
   Settings as SettingsIcon,
   LogOut,
@@ -59,6 +61,7 @@ function AppContent() {
     { id: 'cong-no', label: 'Công nợ', icon: Layers },
     { id: 'giang-vien', label: 'Giảng viên', icon: Award },
     { id: 'xe-tap', label: 'Xe tập lái', icon: Car },
+    { id: 'dat', label: 'DAT', icon: Gauge },
     { id: 'bao-cao', label: 'Báo cáo', icon: FileSpreadsheet },
     { id: 'cai-dat', label: 'Cài đặt', icon: SettingsIcon }
   ];
@@ -415,6 +418,10 @@ function AppContent() {
 
         {activeView === 'xe-tap' && (
           <Vehicles />
+        )}
+
+        {activeView === 'dat' && (
+          <DatManagement />
         )}
 
         {activeView === 'bao-cao' && (

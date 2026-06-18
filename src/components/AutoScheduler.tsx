@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
 import { getLocalTodayString, getLocalOffsetString } from '../utils/dateUtils';
-import { Calendar, Car, CheckCircle2, Clock, Filter, Info, Play, ShieldCheck, Sparkles, Users, XCircle } from 'lucide-react';
+import { CheckCircle2, Clock, Filter, Info, Play, ShieldCheck, Sparkles, Users, XCircle } from 'lucide-react';
 import { Instructor, Lesson, Student, Vehicle } from '../types';
 
 interface AutoSchedulerProps {
@@ -37,6 +37,11 @@ type FailedDraft = {
   studentId: string;
   studentName: string;
   reasons: string[];
+};
+
+const safeNumber = (value: unknown, fallback = 0): number => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 };
 
 const toMinutes = (time: string): number => {
@@ -172,7 +177,7 @@ const scoreCandidate = (
 };
 
 export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
-  const { students, instructors, vehicles, lessons, settings, addAuditLog, currentUser } = useDatabase();
+  const { students, instructors, vehicles, lessons, settings, addAuditLog } = useDatabase();
 
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [startDate, setStartDate] = useState(getLocalTodayString());
@@ -193,12 +198,12 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
   const [failedDrafts, setFailedDrafts] = useState<FailedDraft[]>([]);
   const [hasGenerated, setHasGenerated] = useState(false);
 
-  const activeStudents = useMemo(
-    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && (s.remainingSessions || 0) > 0),
+  const activeStudents: Student[] = useMemo(
+    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && safeNumber(s.remainingSessions) > 0),
     [students]
   );
 
-  const selectedStudents = useMemo(
+  const selectedStudents: Student[] = useMemo(
     () => activeStudents.filter(s => selectedStudentIds.includes(s.id)),
     [activeStudents, selectedStudentIds]
   );
@@ -238,18 +243,23 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
 
     const generated: DraftLesson[] = [];
     const failures: FailedDraft[] = [];
-    const targetMap = new Map(selectedStudents.map(s => [s.id, Math.min(Math.max(1, sessionsPerStudent), Math.max(1, s.remainingSessions || 1))]));
+    const targetMap: Map<string, number> = new Map(
+      selectedStudents.map((s): [string, number] => [
+        s.id,
+        Math.min(Math.max(1, safeNumber(sessionsPerStudent, 1)), Math.max(1, safeNumber(s.remainingSessions, 1)))
+      ])
+    );
     const countMap = new Map<string, number>();
-    const maxPerDay = settings?.autoSchedulingRules?.maxLessonsPerStudentPerDay || 1;
+    const maxPerDay = Math.max(1, safeNumber(settings?.autoSchedulingRules?.maxLessonsPerStudentPerDay, 1));
     const dates = dateRange(startDate, endDate).filter(d => preferredDays.includes(new Date(`${d}T00:00:00`).getDay()));
 
     for (const date of dates) {
-      for (const window of timeWindows) {
+      for (const timeWindow of timeWindows) {
         const candidates: { student: Student; instructor: Instructor; vehicle: Vehicle; score: number; reasons: string[]; warnings: string[] }[] = [];
 
         for (const student of selectedStudents) {
-          const currentCount = countMap.get(student.id) || 0;
-          const targetCount = targetMap.get(student.id) || 1;
+          const currentCount = safeNumber(countMap.get(student.id), 0);
+          const targetCount = safeNumber(targetMap.get(student.id), 1);
           if (currentCount >= targetCount) continue;
           if (sameDayCount(student.id, date, lessons, generated) >= maxPerDay) continue;
 
@@ -257,9 +267,9 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
           const vehiclePool = vehicles.filter(v => vehiclePref === 'auto' ? licenseMatchesVehicle(student, v) : v.id === vehiclePref && licenseMatchesVehicle(student, v));
 
           for (const instructor of instructorPool) {
-            if (!isInstructorWorking(instructor, date, window.start, window.end)) continue;
+            if (!isInstructorWorking(instructor, date, timeWindow.start, timeWindow.end)) continue;
             for (const vehicle of vehiclePool) {
-              const conflicts = hasConflict(student.id, instructor.id, vehicle.id, date, window.start, window.end, lessons, generated);
+              const conflicts = hasConflict(student.id, instructor.id, vehicle.id, date, timeWindow.start, timeWindow.end, lessons, generated);
               if (conflicts.length > 0) continue;
               const result = scoreCandidate(student, instructor, vehicle, strategy, date, examDates);
               const warnings: string[] = [];
@@ -273,7 +283,7 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
         const best = candidates.sort((a, b) => b.score - a.score)[0];
         if (best) {
           generated.push({
-            id: `draft_${date}_${window.start}_${best.student.id}`,
+            id: `draft_${date}_${timeWindow.start}_${best.student.id}`,
             studentId: best.student.id,
             studentName: best.student.name,
             instructorId: best.instructor.id,
@@ -281,21 +291,21 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
             vehicleId: best.vehicle.id,
             vehicleName: `${best.vehicle.name} (${best.vehicle.plate})`,
             date,
-            startTime: window.start,
-            endTime: window.end,
+            startTime: timeWindow.start,
+            endTime: timeWindow.end,
             score: best.score,
             status: best.warnings.length ? 'warning' : 'ok',
             reasons: best.reasons,
             warnings: best.warnings
           });
-          countMap.set(best.student.id, (countMap.get(best.student.id) || 0) + 1);
+          countMap.set(best.student.id, safeNumber(countMap.get(best.student.id), 0) + 1);
         }
       }
     }
 
     selectedStudents.forEach(student => {
-      const currentCount = countMap.get(student.id) || 0;
-      const targetCount = targetMap.get(student.id) || 1;
+      const currentCount = safeNumber(countMap.get(student.id), 0);
+      const targetCount = safeNumber(targetMap.get(student.id), 1);
       if (currentCount < targetCount) {
         failures.push({
           studentId: student.id,
@@ -348,7 +358,7 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
               <label className="space-y-1"><span className="text-slate-400 uppercase text-[10px]">Đến ngày</span><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
               <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Giảng viên</span><select value={instructorPref} onChange={e => setInstructorPref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{instructors.filter(i => i.active).map(i => <option key={i.id} value={i.id}>{i.name}</option>)}</select></label>
               <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Xe tập</span><select value={vehiclePref} onChange={e => setVehiclePref(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3 py-2"><option value="auto">Tự chọn phù hợp</option>{vehicles.filter(v => v.status !== 'Bảo dưỡng' && v.status !== 'Tạm ngưng').map(v => <option key={v.id} value={v.id}>{v.name} - {v.plate}</option>)}</select></label>
-              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Số ca / học viên trong lượt nháp</span><input type="number" min={1} max={7} value={sessionsPerStudent} onChange={e => setSessionsPerStudent(Number(e.target.value || 1))} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
+              <label className="space-y-1 col-span-2"><span className="text-slate-400 uppercase text-[10px]">Số ca / học viên trong lượt nháp</span><input type="number" min={1} max={7} value={sessionsPerStudent} onChange={e => setSessionsPerStudent(safeNumber(e.target.value, 1))} className="w-full rounded-xl border border-slate-200 px-3 py-2" /></label>
             </div>
           </div>
 

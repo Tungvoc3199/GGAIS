@@ -63,8 +63,12 @@ export function doIntervalsOverlap(
   return s1 < e2 && s2 < e1;
 }
 
+function normalizeText(value: any): string {
+  return String(value || '').trim().toLowerCase();
+}
+
 function isInstructorOperational(instructor: any): boolean {
-  const status = String(instructor?.status || '').trim().toLowerCase();
+  const status = normalizeText(instructor?.status);
   if (instructor?.active === false) return false;
 
   const blockedKeywords = ['tạm nghỉ', 'nghỉ việc', 'ngừng', 'không hoạt động', 'khóa'];
@@ -102,6 +106,55 @@ function isVehicleOperational(status: any): boolean {
   ]);
 
   return activeStatuses.has(value) || !value;
+}
+
+function isAutomaticVehicle(car: Vehicle): boolean {
+  const hint = normalizeText(`${car.transmission || ''} ${car.suitableLicenseClass || ''} ${car.category || ''} ${car.name || ''}`);
+  return hint.includes('số tự động') || hint.includes('tự động') || hint.includes('tu dong') || hint.includes('automatic') || hint.includes('at');
+}
+
+function isManualVehicle(car: Vehicle): boolean {
+  const hint = normalizeText(`${car.transmission || ''} ${car.suitableLicenseClass || ''} ${car.category || ''} ${car.name || ''}`);
+  return hint.includes('số sàn') || hint.includes('so san') || hint.includes('manual') || hint.includes('mt');
+}
+
+function hasBSignal(car: Vehicle): boolean {
+  const hint = normalizeText(`${car.suitableLicenseClass || ''} ${car.category || ''} ${car.name || ''}`);
+  return hint.includes('b') || isAutomaticVehicle(car) || isManualVehicle(car);
+}
+
+function hasC1Signal(car: Vehicle): boolean {
+  const hint = normalizeText(`${car.suitableLicenseClass || ''} ${car.category || ''} ${car.name || ''}`);
+  return hint.includes('c1') || hint.includes('hạng c') || hint.includes('hang c');
+}
+
+function getVehicleCompatibilityError(student: Student, car: Vehicle): string | null {
+  const license = student.licenseClass;
+  const auto = isAutomaticVehicle(car);
+  const manual = isManualVehicle(car);
+  const bVehicle = hasBSignal(car);
+  const c1Vehicle = hasC1Signal(car);
+
+  // B tự động chỉ được học phần lái trên xe số tự động.
+  if (license === 'B số tự động') {
+    if (manual && !auto) return 'Học viên hạng B số tự động không được xếp tập trên xe số sàn.';
+    return null;
+  }
+
+  // B số sàn được học cả xe số sàn và xe số tự động.
+  // Không báo lỗi khi xe khai báo B số tự động vì đây là cấu phần học hợp lệ.
+  if (license === 'B số sàn') {
+    if (bVehicle || auto || manual) return null;
+    return `Xe tập ${car.name} (${car.plate}) chưa phù hợp với cấu phần học của học viên hạng B số sàn.`;
+  }
+
+  // C1 có phần học xe C1 và vẫn có phần học trên xe số tự động/BTĐ.
+  if (license === 'C1') {
+    if (c1Vehicle || auto) return null;
+    return `Xe tập ${car.name} (${car.plate}) chưa phù hợp với cấu phần học của học viên hạng C1.`;
+  }
+
+  return null;
 }
 
 function isCancelledLesson(lesson: Lesson): boolean {
@@ -196,15 +249,8 @@ export function checkLessonConflicts(
     }
 
     if (car) {
-      if (car.suitableLicenseClass && car.suitableLicenseClass !== student.licenseClass) {
-        reasons.push(`Xe tập ${car.name} (${car.plate}) chỉ phù hợp đào tạo hạng ${car.suitableLicenseClass}, học viên ký hạng ${student.licenseClass}.`);
-      }
-
-      if (student.licenseClass === 'B số tự động' && car.transmission !== 'Số tự động') {
-        reasons.push('Học viên học hạng B số tự động không được xếp tập trên xe Số sàn.');
-      } else if ((student.licenseClass === 'B số sàn' || student.licenseClass === 'C1') && car.transmission !== 'Số sàn') {
-        reasons.push(`Học viên học hạng ${student.licenseClass} không được xếp tập trên xe Số tự động.`);
-      }
+      const vehicleCompatibilityError = getVehicleCompatibilityError(student, car);
+      if (vehicleCompatibilityError) reasons.push(vehicleCompatibilityError);
     }
   }
 
@@ -518,53 +564,9 @@ export function runAutoSchedulingEngine(
 }
 
 /**
- * Lists the free slots of the day classified by Instructor or Vehicle.
+ * Helper for detecting if a user-facing warning is actually blocking.
  */
-export function getFreeSlotsReport(
-  date: string,
-  instructorId: string,
-  vehicleId: string,
-  durationMinutes: number,
-  existingLessons: Lesson[],
-  settings: AppSettings
-): { startTime: string; endTime: string; label: string }[] {
-  const schoolHours = settings?.workingHours || { start: '07:00', end: '18:05' };
-  const minStart = timeToMinutes(schoolHours.start);
-  const minEnd = timeToMinutes(schoolHours.end);
-  const freeSlots: { startTime: string; endTime: string; label: string }[] = [];
-
-  if (!Number.isFinite(minStart) || !Number.isFinite(minEnd) || durationMinutes <= 0) {
-    return freeSlots;
-  }
-
-  for (let m = minStart; m + durationMinutes <= minEnd; m += 30) {
-    const startStr = minutesToTime(m);
-    const endStr = minutesToTime(m + durationMinutes);
-
-    let isReserved = false;
-    for (const les of existingLessons) {
-      if (isCancelledLesson(les)) continue;
-      if (les.date !== date) continue;
-
-      const overlaps = doIntervalsOverlap(startStr, endStr, les.startTime, les.endTime);
-      if (overlaps && (les.instructorId === instructorId || les.vehicleId === vehicleId)) {
-        isReserved = true;
-        break;
-      }
-    }
-
-    if (!isReserved) {
-      let segment = 'Sáng';
-      if (m >= 720 && m < 1020) segment = 'Chiều';
-      else if (m >= 1020) segment = 'Tối';
-
-      freeSlots.push({
-        startTime: startStr,
-        endTime: endStr,
-        label: `${startStr} - ${endStr} (${segment})`
-      });
-    }
-  }
-
-  return freeSlots;
+export function summarizeSchedulingOutcome(result: ConflictResult): string {
+  if (!result.hasConflict) return 'Không phát hiện xung đột.';
+  return result.reasons.join('\n');
 }

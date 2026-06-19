@@ -8,6 +8,7 @@ on:
     paths:
       - 'src/**'
       - 'server.ts'
+      - 'scripts/**'
       - 'package.json'
       - 'package-lock.json'
       - 'index.html'

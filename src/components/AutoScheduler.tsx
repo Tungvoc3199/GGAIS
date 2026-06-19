@@ -162,10 +162,14 @@ const scoreCandidate = (
   if (student.assignedInstructorId && student.assignedInstructorId === instructor.id) {
     score += 18;
     reasons.push('Đúng giảng viên đang phụ trách');
+  } else if (!student.assignedInstructorId) {
+    reasons.push('Tự chọn giảng viên phù hợp');
   }
   if (student.assignedVehicleId && student.assignedVehicleId === vehicle.id) {
     score += 14;
     reasons.push('Đúng xe đã gán cho học viên');
+  } else if (!student.assignedVehicleId) {
+    reasons.push('Tự chọn xe phù hợp');
   }
   if (student.remainingSessions > 0) {
     score += Math.min(18, student.remainingSessions * 2);
@@ -304,8 +308,6 @@ export const AutoScheduler: React.FC<AutoSchedulerProps> = ({ onNavigate }) => {
               if (conflicts.length > 0) continue;
               const result = scoreCandidate(student, instructor, vehicle, strategy, date, examDates);
               const warnings: string[] = [];
-              if (!student.assignedInstructorId) warnings.push('Học viên chưa gán giảng viên phụ trách');
-              if (!student.assignedVehicleId) warnings.push('Học viên chưa gán xe mặc định');
               candidates.push({ student, instructor, vehicle, score: result.score, reasons: result.reasons, warnings });
             }
           }

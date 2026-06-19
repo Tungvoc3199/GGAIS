@@ -103,16 +103,18 @@ const licenseMatchesInstructor = (student: Student, instructor: Instructor) => {
   const allowed = instructor.vehicleTypes.map(t => normalizeText(t)).join(' ');
   const license = normalizeText(student.licenseClass);
   if (license.includes('b')) return allowed.includes('b') || allowed.includes('số tự động') || allowed.includes('số sàn') || allowed.includes('tu dong') || allowed.includes('so san');
-  if (license.includes('c1') || license.includes('c')) return allowed.includes('c1') || allowed.includes('c');
+  if (license.includes('c1') || license.includes('c')) return allowed.includes('c1') || allowed.includes('c') || allowed.includes('b');
   return instructor.vehicleTypes.includes(student.licenseClass);
 };
 
 const licenseMatchesVehicle = (student: Student, vehicle: Vehicle) => {
   if (!isVehicleSchedulable(vehicle)) return false;
   const hint = `${vehicle.suitableLicenseClass || ''} ${vehicle.category || ''} ${vehicle.name || ''} ${vehicle.transmission || ''}`.toLowerCase();
-  if (student.licenseClass === 'B số tự động') return vehicle.transmission === 'Số tự động' || hint.includes('tự động') || hint.includes('tu dong') || hint.includes('at') || hint.includes('b');
-  if (student.licenseClass === 'B số sàn') return vehicle.transmission === 'Số sàn' || hint.includes('số sàn') || hint.includes('so san') || hint.includes('mt') || hint.includes('b');
-  if (student.licenseClass === 'C1') return hint.includes('c1') || hint.includes('c');
+  const isAuto = vehicle.transmission === 'Số tự động' || hint.includes('tự động') || hint.includes('tu dong') || hint.includes('automatic') || hint.includes('at');
+  const isManual = vehicle.transmission === 'Số sàn' || hint.includes('số sàn') || hint.includes('so san') || hint.includes('manual') || hint.includes('mt');
+  if (student.licenseClass === 'B số tự động') return isAuto;
+  if (student.licenseClass === 'B số sàn') return isAuto || isManual || hint.includes('b');
+  if (student.licenseClass === 'C1') return isAuto || hint.includes('c1') || hint.includes('hạng c') || hint.includes('hang c') || hint.includes(' c');
   return true;
 };
 

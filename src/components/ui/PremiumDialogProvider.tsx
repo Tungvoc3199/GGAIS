@@ -138,6 +138,24 @@ function normalizeConfirm(options: PremiumConfirmOptions | string): PremiumConfi
   };
 }
 
+function isDesktopKeyboardContext(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hasFinePointer = window.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+  return hasFinePointer ?? window.innerWidth >= 768;
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  const tag = element.tagName?.toLowerCase();
+  return Boolean(
+    element.isContentEditable ||
+    tag === 'input' ||
+    tag === 'textarea' ||
+    tag === 'select'
+  );
+}
+
 export const PremiumDialogProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const nativeAlertRef = useRef<typeof window.alert | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -222,6 +240,30 @@ export const PremiumDialogProvider: React.FC<{ children: React.ReactNode }> = ({
     dialog.resolve?.(result);
     setDialog(prev => ({ ...prev, open: false, resolve: undefined }));
   };
+
+  useEffect(() => {
+    if (!dialog.open || dialog.variant !== 'alert' || !isDesktopKeyboardContext()) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== 'Enter' ||
+        event.isComposing ||
+        event.shiftKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        isTypingTarget(event.target)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      closeDialog(true);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [dialog.open, dialog.variant]);
 
   const value = useMemo(() => ({ alertDialog, confirmDialog, toast }), [alertDialog, confirmDialog, toast]);
   const currentTone = toneConfig[dialog.tone || 'info'];

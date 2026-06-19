@@ -21,7 +21,7 @@ const getVietnameseGivenNameKey = (fullName: unknown): string => {
   const parts = normalized.split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '';
   const givenName = parts[parts.length - 1];
-  return `${givenName} ${normalized}`;
+  return givenName + ' ' + normalized;
 };
 
 const compareStudentsByVietnameseName = <T extends { name?: string; code?: string }>(a: T, b: T): number => {

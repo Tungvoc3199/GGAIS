@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs",
+    "predev": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs && node scripts/patch-premium-input-controls.mjs",
     "dev": "tsx server.ts",
-    "prebuild": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs",
+    "prebuild": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs && node scripts/patch-premium-input-controls.mjs",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",

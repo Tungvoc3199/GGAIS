@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 const file = 'server.ts';
-const marker = 'OCR_CARD_ROUTE_RESTORED_VNEID_PRIMARY';
+const marker = 'OCR_CARD_ROUTE_RESTORED_SAFE';
 let src = fs.readFileSync(file, 'utf8');
 
 if (src.includes(marker)) {
@@ -11,7 +11,92 @@ if (src.includes(marker)) {
 
 const anchor = `  app.get("/api/health", (req, res) => {\n`;
 
-const route = `  // ${marker}\n  app.post("/api/ocr-card", checkOcrAuth, async (req, res) => {\n    try {\n      const { image, cardType } = req.body || {};\n      if (!image || typeof image !== "string") {\n        return res.status(400).json({ success: false, error: "Thiếu ảnh để nhận dạng." });\n      }\n\n      const dataUrlMatch = image.match(/^data:(.*?);base64,(.*)$/);\n      const mimeType = dataUrlMatch?.[1] || "image/jpeg";\n      const base64Data = dataUrlMatch?.[2] || image;\n\n      if (!base64Data || base64Data.length < 128) {\n        return res.status(400).json({ success: false, error: "Ảnh không hợp lệ hoặc quá nhỏ." });\n      }\n\n      const ai = getGeminiClient();\n      const isVneid = String(cardType || "").toLowerCase().includes("vneid") || String(cardType || "").toLowerCase().includes("điện tử");\n      const prompt = `Trích xuất dữ liệu tuyển sinh từ ảnh giấy tờ học viên.\\n` +\n        `Nguồn ảnh: ${isVneid ? "VNeID" : "CCCD"}. Nếu là VNeID, ưu tiên địa chỉ đang hiển thị trên VNeID.\\n` +\n        `Chỉ trả JSON hợp lệ gồm các trường: fullName, dob dạng YYYY-MM-DD nếu đọc được, address. Trường không chắc thì để chuỗi rỗng.`;\n\n      const response = await withTimeout(\n        ai.models.generateContent({\n          model: "gemini-2.5-flash",\n          contents: [\n            {\n              role: "user",\n              parts: [\n                { text: prompt },\n                { inlineData: { mimeType, data: base64Data } }\n              ]\n            }\n          ],\n          config: {\n            responseMimeType: "application/json",\n            responseSchema: {\n              type: Type.OBJECT,\n              properties: {\n                fullName: { type: Type.STRING },\n                dob: { type: Type.STRING },\n                address: { type: Type.STRING }\n              }\n            }\n          }\n        }),\n        45000,\n        "Máy chủ AI nhận dạng quá thời gian phản hồi."\n      );\n\n      let rawText = String((response as any).text || "").trim();\n      if (!rawText && (response as any).candidates?.[0]?.content?.parts?.[0]?.text) {\n        rawText = String((response as any).candidates[0].content.parts[0].text || "").trim();\n      }\n      rawText = rawText.replace(/^```json\\s*/i, "").replace(/^```\\s*/i, "").replace(/```$/i, "").trim();\n\n      let parsed: any = {};\n      try {\n        parsed = rawText ? JSON.parse(rawText) : {};\n      } catch {\n        return res.status(502).json({ success: false, error: "AI đã phản hồi nhưng chưa đúng định dạng dữ liệu. Vui lòng thử ảnh rõ hơn." });\n      }\n\n      const clean = (value: any) => String(value || "").trim();\n      return res.json({\n        success: true,\n        data: {\n          fullName: clean(parsed.fullName).toUpperCase(),\n          dob: clean(parsed.dob),\n          address: clean(parsed.address),\n          source: isVneid ? "vneid" : "cccd"\n        }\n      });\n    } catch (error: any) {\n      console.error("[OCR Card] Recognition failed:", { message: error?.message, name: error?.name, code: error?.code });\n      const missingKey = String(error?.message || "").includes("GEMINI_API_KEY");\n      return res.status(missingKey ? 503 : 500).json({\n        success: false,\n        error: missingKey ? "Máy chủ chưa cấu hình GEMINI_API_KEY cho nhận dạng AI." : (error?.message || "Không thể nhận dạng giấy tờ bằng AI lúc này.")\n      });\n    }\n  });\n\n`;
+const route = `  // ${marker}
+  app.post("/api/ocr-card", checkOcrAuth, async (req, res) => {
+    try {
+      const { image, cardType } = req.body || {};
+      if (!image || typeof image !== "string") {
+        return res.status(400).json({ success: false, error: "Thiếu ảnh để nhận dạng." });
+      }
+
+      const dataUrlMatch = image.match(/^data:(.*?);base64,(.*)$/);
+      const mimeType = dataUrlMatch?.[1] || "image/jpeg";
+      const base64Data = dataUrlMatch?.[2] || image;
+
+      if (!base64Data || base64Data.length < 128) {
+        return res.status(400).json({ success: false, error: "Ảnh không hợp lệ hoặc quá nhỏ." });
+      }
+
+      const ai = getGeminiClient();
+      const sourceLabel = String(cardType || "");
+      const prompt =
+        "Read the uploaded Vietnamese student enrollment source image. Return valid JSON only. " +
+        "Fields: fullName, dob in YYYY-MM-DD when visible, address. " +
+        "If sourceLabel suggests the newer electronic source, prefer the address shown there. " +
+        "Unknown fields must be empty strings. Source label: " + sourceLabel;
+
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType, data: base64Data } }
+              ]
+            }
+          ],
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                fullName: { type: Type.STRING },
+                dob: { type: Type.STRING },
+                address: { type: Type.STRING }
+              }
+            }
+          }
+        }),
+        45000,
+        "Máy chủ AI nhận dạng quá thời gian phản hồi."
+      );
+
+      let rawText = String((response as any).text || "").trim();
+      if (!rawText && (response as any).candidates?.[0]?.content?.parts?.[0]?.text) {
+        rawText = String((response as any).candidates[0].content.parts[0].text || "").trim();
+      }
+      rawText = rawText.replace(/^```json\\s*/i, "").replace(/^```\\s*/i, "").replace(/```$/i, "").trim();
+
+      let parsed: any = {};
+      try {
+        parsed = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        return res.status(502).json({ success: false, error: "AI đã phản hồi nhưng chưa đúng định dạng dữ liệu. Vui lòng thử ảnh rõ hơn." });
+      }
+
+      const clean = (value: any) => String(value || "").trim();
+      return res.json({
+        success: true,
+        data: {
+          fullName: clean(parsed.fullName).toUpperCase(),
+          dob: clean(parsed.dob),
+          address: clean(parsed.address),
+          source: sourceLabel
+        }
+      });
+    } catch (error: any) {
+      console.error("[OCR Card] Recognition failed:", { message: error?.message, name: error?.name, code: error?.code });
+      const missingKey = String(error?.message || "").includes("GEMINI_API_KEY");
+      return res.status(missingKey ? 503 : 500).json({
+        success: false,
+        error: missingKey ? "Máy chủ chưa cấu hình GEMINI_API_KEY cho nhận dạng AI." : (error?.message || "Không thể nhận dạng ảnh bằng AI lúc này.")
+      });
+    }
+  });
+
+`;
 
 if (!src.includes(anchor)) {
   throw new Error('[patch-ocr-card-route] Could not find /api/health anchor');

@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs && node scripts/patch-premium-input-controls.mjs && node scripts/patch-ocr-card-route.mjs && node scripts/patch-ocr-dob-normalize.mjs && node scripts/patch-vietnam-date-format.mjs && node scripts/patch-student-abc-sort.mjs && node scripts/patch-student-render-sort-by-given-name.mjs && node scripts/patch-smart-scheduler-student-availability.mjs",
+    "predev": "node scripts/prebuild-all.mjs",
     "dev": "tsx server.ts",
-    "prebuild": "node scripts/patch-lesson-progress.mjs && node scripts/patch-schedule-order.mjs && node scripts/patch-dat-progress.mjs && node scripts/patch-dat-ledger.mjs && node scripts/patch-student-tuition-defaults.mjs && node scripts/patch-premium-input-controls.mjs && node scripts/patch-ocr-card-route.mjs && node scripts/patch-ocr-dob-normalize.mjs && node scripts/patch-vietnam-date-format.mjs && node scripts/patch-student-abc-sort.mjs && node scripts/patch-student-render-sort-by-given-name.mjs && node scripts/patch-smart-scheduler-student-availability.mjs",
+    "prebuild": "node scripts/prebuild-all.mjs",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",

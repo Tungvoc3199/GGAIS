@@ -14,6 +14,7 @@ const scripts = [
   'patch-student-abc-sort.mjs',
   'patch-student-render-sort-by-given-name.mjs',
   'patch-smart-scheduler-student-availability.mjs',
+  'patch-autoscheduler-time-24h.mjs',
   'patch-smart-scheduler-exam-schedule.mjs'
 ];
 

@@ -25,7 +25,7 @@ const lines = [
   '        return res.status(400).json({ success: false, error: "Ảnh lịch thi không hợp lệ hoặc quá nhỏ." });',
   '      }',
   '      const ai = getGeminiClient();',
-  '      const prompt = "Read the Vietnamese driving test schedule image. Extract all exam dates. Return valid JSON only with examDates as an array of YYYY-MM-DD strings. If the title contains month/year, use that year for all listed dates. Ignore row numbers and weekday names.";',
+  '      const prompt = "Đọc ảnh lịch thi lái xe của Việt Nam. Lịch thường có tiêu đề như LỊCH THI THÁNG 7/2026, cột NGÀY THI dạng dd/mm/yyyy và cột THỨ dạng THỨ 2, THỨ 3, THỨ 4, THỨ 5, THỨ 6, THỨ 7 hoặc CHỦ NHẬT. Hãy trích xuất tất cả ngày thi hợp lệ. Trả về JSON hợp lệ duy nhất: { examDates: [YYYY-MM-DD], sourceMonth: string, note: string }. Nếu ảnh chỉ có ngày/tháng nhưng tiêu đề có tháng/năm thì dùng năm trong tiêu đề. Không lấy STT, không lấy thứ làm ngày.";',
   '      const response = await withTimeout(',
   '        ai.models.generateContent({',
   '          model: "gemini-2.5-flash",',

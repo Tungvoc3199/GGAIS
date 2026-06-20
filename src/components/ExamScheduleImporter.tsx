@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { CalendarCheck2, ImagePlus, Sparkles, X } from 'lucide-react';
 import { formatDateVN, parseDateVNToISO } from './PremiumDateInput';
+import { useDatabase, OCR_API_TIMEOUT_MS } from '../context/DatabaseContext';
 
 type ExamScheduleImporterProps = {
   dates: string[];
@@ -26,6 +27,7 @@ const fileToDataUrl = (file: File): Promise<string> => new Promise((resolve, rej
 });
 
 export const ExamScheduleImporter: React.FC<ExamScheduleImporterProps> = ({ dates, onChange }) => {
+  const { authFetch } = useDatabase();
   const [manualText, setManualText] = useState('');
   const [isReading, setIsReading] = useState(false);
 
@@ -62,13 +64,11 @@ export const ExamScheduleImporter: React.FC<ExamScheduleImporterProps> = ({ date
     setIsReading(true);
     try {
       const image = await fileToDataUrl(file);
-      const response = await fetch('/api/ocr-exam-schedule', {
+      const payload = await authFetch('/api/ocr-exam-schedule', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image })
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || !payload?.success) throw new Error(payload?.error || 'Không thể đọc ảnh lịch thi.');
+        body: JSON.stringify({ image, locale: 'vi-VN', inputDateFormat: 'dd/mm/yyyy' })
+      }, OCR_API_TIMEOUT_MS);
+      if (!payload?.success) throw new Error(payload?.error || 'Không thể đọc ảnh lịch thi.');
       const parsed = uniqueSortedDates(payload?.data?.examDates || []);
       if (parsed.length === 0) {
         await window.__lhpAlert?.({ title: 'Chưa đọc được ngày thi', message: 'Ảnh lịch thi chưa đủ rõ. Anh nhập tay bên dưới để dùng tiếp.', tone: 'warning' });
@@ -89,7 +89,7 @@ export const ExamScheduleImporter: React.FC<ExamScheduleImporterProps> = ({ date
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-black text-slate-900 flex items-center gap-2"><CalendarCheck2 className="h-4 w-4 text-emerald-600" /> Lịch thi trung tâm</h2>
-          <p className="mt-1 text-[11px] font-bold text-slate-400">Upload ảnh lịch thi tháng hoặc nhập tay. Chỉ dùng cho gợi ý, không ảnh hưởng xếp thủ công.</p>
+          <p className="mt-1 text-[11px] font-bold text-slate-400">Upload ảnh lịch thi tháng hoặc nhập tay. Ngày hiển thị chuẩn Việt Nam dd/mm/yyyy, không ảnh hưởng xếp thủ công.</p>
         </div>
         <label className={`shrink-0 rounded-2xl px-3 py-2 text-[11px] font-black text-white shadow-lg ${isReading ? 'bg-slate-400' : 'bg-emerald-600 hover:bg-emerald-700'}`}>
           <input type="file" accept="image/*" onChange={handleUpload} disabled={isReading} className="hidden" />

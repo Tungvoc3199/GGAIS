@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 
 const file = 'src/components/AutoScheduler.tsx';
-const marker = 'SMART_SCHEDULER_CENTER_EXAM_SCHEDULE_V1';
+const marker = 'SMART_SCHEDULER_CENTER_EXAM_SCHEDULE_V2';
 let src = fs.readFileSync(file, 'utf8');
 
 if (src.includes(marker)) {
@@ -33,6 +33,8 @@ replaceOnce(
 const functionAnchor = "  const getDaysSinceLastLesson = (studentId: string, targetDate: string): number | null => {";
 const helperBlock = [
   "  // " + marker,
+  "  const isCenterExamDate = (targetDate: string): boolean => centerExamDates.includes(targetDate);",
+  "",
   "  const getUpcomingCenterExamDate = (targetDate: string): string => {",
   "    return [...centerExamDates].sort().find(date => date >= targetDate) || '';",
   "  };",
@@ -50,6 +52,15 @@ if (src.includes(functionAnchor)) {
   src = src.replace(generateAnchor, helperBlock + generateAnchor);
 }
 
+if (src.includes("    const dates = dateRange(startDate, endDate);")) {
+  src = src.replace(
+    "    const dates = dateRange(startDate, endDate);",
+    "    const dates = dateRange(startDate, endDate).filter(d => !isCenterExamDate(d));"
+  );
+} else {
+  throw new Error('[patch-smart-scheduler-exam-schedule] Missing dateRange block');
+}
+
 replaceOnce(
   "              candidates.push({ student, instructor, vehicle, score: result.score + smartScore, reasons: [...smartReasons, ...result.reasons], warnings });",
   [
@@ -60,9 +71,6 @@ replaceOnce(
     "                  smartScore += Math.max(8, 30 - daysToCenterExam);",
     "                  smartReasons.push('Theo lịch thi trung tâm ' + formatDate(centerExamDate));",
     "                  if (daysToCenterExam <= 7) smartReasons.push('Ưu tiên ôn tập / xe chip trước thi');",
-    "                } else if (daysToCenterExam === 0) {",
-    "                  smartScore -= 20;",
-    "                  warnings.push('Trùng ngày thi trung tâm, chỉ nên xếp nếu thật sự cần');",
     "                }",
     "              }",
     "              candidates.push({ student, instructor, vehicle, score: result.score + smartScore, reasons: [...smartReasons, ...result.reasons], warnings });"
@@ -81,8 +89,8 @@ src = src.replace(
 
 src = src.replace(
   "Đây mới là lịch nháp đề xuất. Anh duyệt/chỉnh rồi Sprint sau mới ghi vào lịch thật, không tự động ghi thẳng.",
-  "Đây mới là lịch nháp đề xuất. Lịch thi trung tâm chỉ dùng để ưu tiên ôn tập / xe chip; anh duyệt/chỉnh rồi Sprint sau mới ghi vào lịch thật."
+  "Đây mới là lịch nháp đề xuất. Ngày thi trung tâm được đánh dấu đỏ và không tự xếp ca học; anh tự xếp tay ngày đó để đưa học viên đi thi."
 );
 
 fs.writeFileSync(file, src);
-console.log('[patch-smart-scheduler-exam-schedule] patched center exam schedule importer and scoring');
+console.log('[patch-smart-scheduler-exam-schedule] patched center exam schedule importer, red exam-day skip logic and scoring');

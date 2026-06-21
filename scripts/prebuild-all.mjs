@@ -17,6 +17,7 @@ const scripts = [
   'patch-smart-scheduler-student-availability.mjs',
   'patch-autoscheduler-time-24h.mjs',
   'patch-smart-scheduler-exam-schedule.mjs',
+  'patch-smart-scheduler-custom-windows-sort.mjs',
   'patch-dashboard-monthly-calendar.mjs'
 ];
 

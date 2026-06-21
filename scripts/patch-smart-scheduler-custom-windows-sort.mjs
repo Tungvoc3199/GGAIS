@@ -34,9 +34,20 @@ replaceOnce(
   'default student availability uses all default windows'
 );
 
-src = src.replaceAll(
-  "{ days: preferredDays, windows: [timeWindows[0] || { start: '08:00', end: '10:00' }] }",
-  "{ days: preferredDays, windows: timeWindows.length ? timeWindows : [{ start: '08:00', end: '10:00' }] }"
+src = src.replace(
+  "const current = prev[studentId] || { days: preferredDays, windows: [timeWindows[0] || { start: '08:00', end: '10:00' }] };\n      const nextDays = current.days.includes(day) ? current.days.filter(d => d !== day) : [...current.days, day].sort();",
+  "const current = prev[studentId] || { days: preferredDays, windows: timeWindows.length ? timeWindows : [{ start: '08:00', end: '10:00' }] };\n      const nextDays = current.days.includes(day) ? current.days.filter(d => d !== day) : [...current.days, day].sort();"
+);
+
+src = src.replace(
+  "const current = prev[studentId] || { days: preferredDays, windows: [timeWindows[0] || { start: '08:00', end: '10:00' }] };\n      return { ...prev, [studentId]: { ...current, urgent: !current.urgent } };",
+  "const current = prev[studentId] || { days: preferredDays, windows: timeWindows.length ? timeWindows : [{ start: '08:00', end: '10:00' }] };\n      return { ...prev, [studentId]: { ...current, urgent: !current.urgent } };"
+);
+
+replaceOnce(
+  `  const updateStudentAvailabilityWindow = (studentId: string, index: number, key: keyof TimeWindow, value: string) => {\n    setStudentAvailability(prev => {\n      const current = prev[studentId] || { days: preferredDays, windows: [timeWindows[0] || { start: '08:00', end: '10:00' }] };\n      const windows = current.windows.length ? current.windows : [timeWindows[0] || { start: '08:00', end: '10:00' }];\n      const nextWindows = windows.map((w, i) => i === index ? { ...w, [key]: value } : w);\n      return { ...prev, [studentId]: { ...current, windows: nextWindows } };\n    });\n  };`,
+  `  const updateStudentAvailabilityWindow = (studentId: string, index: number, key: keyof TimeWindow, value: string) => {\n    setStudentAvailability(prev => {\n      const fallbackWindow = timeWindows[0] || { start: '08:00', end: '10:00' };\n      const current = prev[studentId] || { days: preferredDays, windows: [fallbackWindow] };\n      const currentWindow = current.windows[index] || fallbackWindow;\n      const nextWindows = [{ ...currentWindow, [key]: value }];\n      return { ...prev, [studentId]: { ...current, windows: nextWindows } };\n    });\n  };`,
+  'custom time selection uses only selected student window'
 );
 
 replaceOnce(

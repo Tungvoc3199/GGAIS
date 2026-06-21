@@ -34,10 +34,15 @@ const normalizeTime24h = (rawValue: string): string => {
   return `${pad2(h)}:${pad2(m)}`;
 };
 
-const formatTypingValue = (rawValue: string): string => {
-  const digits = String(rawValue || '').replace(/\D/g, '').slice(0, 4);
-  if (digits.length <= 2) return digits;
-  return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+const buildTimeOptions = (stepMinutes: number) => {
+  const safeStep = Number.isFinite(stepMinutes) && stepMinutes > 0 ? stepMinutes : 15;
+  const options: string[] = [];
+  const start = 5 * 60;
+  const end = 22 * 60;
+  for (let minutes = start; minutes <= end; minutes += safeStep) {
+    options.push(`${pad2(Math.floor(minutes / 60))}:${pad2(minutes % 60)}`);
+  }
+  return options;
 };
 
 export const PremiumTimeSelect: React.FC<PremiumTimeSelectProps> = ({
@@ -46,48 +51,78 @@ export const PremiumTimeSelect: React.FC<PremiumTimeSelectProps> = ({
   disabled = false,
   required = false,
   onBlur,
-  className = ''
+  className = '',
+  stepMinutes = 15
 }) => {
-  const [draft, setDraft] = React.useState(value || '');
+  const [open, setOpen] = React.useState(false);
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const normalizedValue = normalizeTime24h(value || '');
+
+  const options = React.useMemo(() => {
+    const base = buildTimeOptions(stepMinutes);
+    if (normalizedValue && !base.includes(normalizedValue)) {
+      return [...base, normalizedValue].sort((a, b) => a.localeCompare(b));
+    }
+    return base;
+  }, [normalizedValue, stepMinutes]);
 
   React.useEffect(() => {
-    setDraft(value || '');
-  }, [value]);
+    if (!open) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        onBlur?.();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => document.removeEventListener('pointerdown', handlePointerDown);
+  }, [open, onBlur]);
 
-  const commitValue = () => {
-    const normalized = normalizeTime24h(draft);
-    setDraft(normalized);
-    onChange(normalized);
+  const chooseTime = (nextValue: string) => {
+    onChange(nextValue);
+    setOpen(false);
     onBlur?.();
   };
 
-  const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatTypingValue(event.target.value);
-    setDraft(formatted);
-    if (/^\d{2}:\d{2}$/.test(formatted)) {
-      onChange(normalizeTime24h(formatted));
-    }
-  };
-
   return (
-    <div className="relative w-full">
-      <input
-        type="text"
-        inputMode="numeric"
-        autoComplete="off"
-        placeholder="HH:mm"
-        value={draft}
-        required={required}
+    <div ref={rootRef} className="relative w-full">
+      <input type="hidden" required={required} value={normalizedValue} readOnly />
+      <button
+        type="button"
         disabled={disabled}
-        onChange={handleChange}
-        onBlur={commitValue}
-        onFocus={(event) => event.currentTarget.select()}
-        className={`w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 pr-10 font-mono text-sm font-black tracking-wider text-slate-900 shadow-inner outline-none transition placeholder:text-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${className}`}
-        aria-label="Nhập giờ theo định dạng 24 giờ HH:mm"
-      />
-      <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-lg bg-white px-1.5 py-0.5 text-[10px] font-black text-slate-400 shadow-sm">
-        24h
-      </span>
+        onClick={() => !disabled && setOpen(prev => !prev)}
+        className={`flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm font-black tracking-wider text-slate-900 shadow-inner outline-none transition hover:border-blue-200 hover:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${open ? 'border-blue-500 bg-white ring-2 ring-blue-100' : ''} ${className}`}
+        aria-label="Chọn giờ theo định dạng 24 giờ HH:mm"
+        aria-expanded={open}
+      >
+        <span>{normalizedValue || 'HH:mm'}</span>
+        <span className="ml-2 flex items-center gap-1 rounded-lg bg-white px-1.5 py-0.5 text-[10px] font-black text-slate-400 shadow-sm">
+          24h <span className={`inline-block transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
+        </span>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 z-[80] mt-2 max-h-64 overflow-y-auto rounded-2xl border border-blue-100 bg-white p-2 shadow-2xl shadow-slate-900/15 ring-1 ring-slate-900/5">
+          <div className="mb-1 px-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
+            Chọn giờ 24h
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {options.map(option => {
+              const isSelected = option === normalizedValue;
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => chooseTime(option)}
+                  className={`rounded-xl px-2 py-2 text-center font-mono text-xs font-black transition ${isSelected ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50 hover:text-blue-700'}`}
+                >
+                  {option}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

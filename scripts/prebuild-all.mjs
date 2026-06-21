@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 const scripts = [
   'patch-lesson-progress.mjs',
   'patch-schedule-order.mjs',
+  'patch-schedule-complete-actions.mjs',
   'patch-dat-progress.mjs',
   'patch-dat-ledger.mjs',
   'patch-student-tuition-defaults.mjs',

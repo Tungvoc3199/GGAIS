@@ -11,6 +11,7 @@ const scripts = [
   'patch-exam-schedule-ocr-route.mjs',
   'patch-ocr-dob-normalize.mjs',
   'patch-vietnam-date-format.mjs',
+  'patch-semi-auto-student-reminders.mjs',
   'patch-student-abc-sort.mjs',
   'patch-student-render-sort-by-given-name.mjs',
   'patch-smart-scheduler-student-availability.mjs',

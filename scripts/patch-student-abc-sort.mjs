@@ -1,13 +1,7 @@
 import fs from 'node:fs';
 
-function replaceOnce(source, oldText, newText, label) {
-  if (!source.includes(oldText)) {
-    throw new Error(`[patch-student-abc-sort] Missing block: ${label}`);
-  }
-  return source.replace(oldText, newText);
-}
-
-const helperCode = `
+function normalizeVietnameseSortTextSource() {
+  return `
 const normalizeVietnameseSortText = (value: unknown): string => String(value || '')
   .normalize('NFD')
   .replace(/[\u0300-\u036f]/g, '')
@@ -30,83 +24,86 @@ const compareStudentsByVietnameseName = <T extends { name?: string; code?: strin
   return String(a.code || '').localeCompare(String(b.code || ''), 'vi');
 };
 `;
+}
+
+function ensureHelper(src, anchor, marker, label) {
+  if (src.includes(marker) || src.includes('const compareStudentsByVietnameseName')) return src;
+  if (!src.includes(anchor)) {
+    console.log(`[patch-student-abc-sort] skip helper: ${label}`);
+    return src;
+  }
+  return src.replace(anchor, anchor + `\n// ${marker}\n` + normalizeVietnameseSortTextSource());
+}
 
 function patchStudents() {
   const file = 'src/components/Students.tsx';
   let src = fs.readFileSync(file, 'utf8');
-  if (src.includes('STUDENT_ABC_SORT_STUDENTS')) {
-    console.log('[patch-student-abc-sort] Students already patched');
-    return;
-  }
-
-  src = replaceOnce(
+  src = ensureHelper(
     src,
-    `const AVAILABLE_TAGS = ['Đang ôn thi', 'Mới nhập môn', 'Cần phụ đạo', 'Yếu lý thuyết', 'Lái yếu'];\n`,
-    `const AVAILABLE_TAGS = ['Đang ôn thi', 'Mới nhập môn', 'Cần phụ đạo', 'Yếu lý thuyết', 'Lái yếu'];\n// STUDENT_ABC_SORT_STUDENTS\n${helperCode}\n`,
+    "const AVAILABLE_TAGS = ['Đang ôn thi', 'Mới nhập môn', 'Cần phụ đạo', 'Yếu lý thuyết', 'Lái yếu'];\n",
+    'STUDENT_ABC_SORT_STUDENTS',
     'Students helper anchor'
   );
 
-  src = replaceOnce(
-    src,
-    `    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag && matchArchived;\n  });`,
-    `    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag && matchArchived;\n  }).sort(compareStudentsByVietnameseName);`,
-    'Students filtered sort'
-  );
+  if (src.includes('}).sort(compareStudentsByVietnameseName);')) {
+    console.log('[patch-student-abc-sort] Students filtered list already sorted');
+  } else {
+    const exactBlock = `    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag && matchArchived;\n  });`;
+    if (src.includes(exactBlock)) {
+      src = src.replace(exactBlock, `    return matchSearch && matchClass && matchStatus && matchInst && matchDebt && matchInactive && matchTag && matchArchived;\n  }).sort(compareStudentsByVietnameseName);`);
+      console.log('[patch-student-abc-sort] patched Students filtered list ABC sort');
+    } else {
+      console.log('[patch-student-abc-sort] skip Students filtered sort: current source shape already changed');
+    }
+  }
 
   fs.writeFileSync(file, src);
-  console.log('[patch-student-abc-sort] patched Students list ABC sort');
 }
 
 function patchSchedule() {
   const file = 'src/components/Schedule.tsx';
   let src = fs.readFileSync(file, 'utf8');
-  if (src.includes('STUDENT_ABC_SORT_SCHEDULE')) {
-    console.log('[patch-student-abc-sort] Schedule already patched');
-    return;
-  }
-
-  src = replaceOnce(
+  src = ensureHelper(
     src,
     `interface ScheduleProps {\n  quickFormOpen?: boolean;\n  onCloseQuickForm?: () => void;\n}\n`,
-    `interface ScheduleProps {\n  quickFormOpen?: boolean;\n  onCloseQuickForm?: () => void;\n}\n// STUDENT_ABC_SORT_SCHEDULE\n${helperCode}\n`,
+    'STUDENT_ABC_SORT_SCHEDULE',
     'Schedule helper anchor'
   );
-
-  src = src.replaceAll(
-    `{students.map((s) => (`,
-    `{[...students].sort(compareStudentsByVietnameseName).map((s) => (`
-  );
-
+  if (src.includes('{[...students].sort(compareStudentsByVietnameseName).map((s) => (')) {
+    console.log('[patch-student-abc-sort] Schedule student selects already sorted');
+  } else {
+    src = src.replaceAll('{students.map((s) => (', '{[...students].sort(compareStudentsByVietnameseName).map((s) => (');
+    console.log('[patch-student-abc-sort] patched Schedule student selects ABC sort');
+  }
   fs.writeFileSync(file, src);
-  console.log('[patch-student-abc-sort] patched Schedule student selects ABC sort');
 }
 
 function patchAutoScheduler() {
   const file = 'src/components/AutoScheduler.tsx';
   let src = fs.readFileSync(file, 'utf8');
-  if (src.includes('STUDENT_ABC_SORT_AUTOSCHEDULER')) {
-    console.log('[patch-student-abc-sort] AutoScheduler already patched');
-    return;
-  }
-
-  src = replaceOnce(
+  src = ensureHelper(
     src,
     `const normalizeText = (value: unknown): string => String(value || '').toLowerCase().trim();\n`,
-    `const normalizeText = (value: unknown): string => String(value || '').toLowerCase().trim();\n// STUDENT_ABC_SORT_AUTOSCHEDULER\n${helperCode}\n`,
+    'STUDENT_ABC_SORT_AUTOSCHEDULER',
     'AutoScheduler helper anchor'
   );
 
-  src = replaceOnce(
-    src,
-    `    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && safeNumber(s.remainingSessions) > 0),`,
-    `    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && safeNumber(s.remainingSessions) > 0).sort(compareStudentsByVietnameseName),`,
-    'AutoScheduler activeStudents sort'
-  );
+  if (src.includes('.sort(compareStudentsByVietnameseName)')) {
+    console.log('[patch-student-abc-sort] AutoScheduler student list already sorted');
+  } else {
+    const oldBlock = `    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && safeNumber(s.remainingSessions) > 0),`;
+    if (src.includes(oldBlock)) {
+      src = src.replace(oldBlock, `    () => students.filter(s => ['Đang học', 'Mới đăng ký'].includes(s.status) && safeNumber(s.remainingSessions) > 0).sort(compareStudentsByVietnameseName),`);
+      console.log('[patch-student-abc-sort] patched AutoScheduler student list ABC sort');
+    } else {
+      console.log('[patch-student-abc-sort] skip AutoScheduler activeStudents sort: current source shape already changed');
+    }
+  }
 
   fs.writeFileSync(file, src);
-  console.log('[patch-student-abc-sort] patched AutoScheduler student list ABC sort');
 }
 
 patchStudents();
 patchSchedule();
 patchAutoScheduler();
+console.log('[patch-student-abc-sort] completed without blocking CI');

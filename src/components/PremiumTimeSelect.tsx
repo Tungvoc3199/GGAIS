@@ -85,28 +85,31 @@ export const PremiumTimeSelect: React.FC<PremiumTimeSelectProps> = ({
   };
 
   return (
-    <div ref={rootRef} className="relative w-full">
+    <div ref={rootRef} className="relative w-full min-w-0">
       <input type="hidden" required={required} value={normalizedValue} readOnly />
       <button
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setOpen(prev => !prev)}
-        className={`flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-sm font-black tracking-wider text-slate-900 shadow-inner outline-none transition hover:border-blue-200 hover:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${open ? 'border-blue-500 bg-white ring-2 ring-blue-100' : ''} ${className}`}
+        className={`flex min-h-[46px] w-full min-w-0 items-center justify-between gap-2 overflow-hidden rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 font-mono text-[13px] font-black leading-none tracking-wider text-slate-900 shadow-inner outline-none transition hover:border-blue-200 hover:bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${open ? 'border-blue-500 bg-white ring-2 ring-blue-100' : ''} ${className}`}
         aria-label="Chọn giờ theo định dạng 24 giờ HH:mm"
         aria-expanded={open}
       >
-        <span>{normalizedValue || 'HH:mm'}</span>
-        <span className="ml-2 flex items-center gap-1 rounded-lg bg-white px-1.5 py-0.5 text-[10px] font-black text-slate-400 shadow-sm">
+        <span className="min-w-0 shrink truncate whitespace-nowrap">{normalizedValue || 'HH:mm'}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1 rounded-lg bg-white px-1.5 py-0.5 text-[10px] font-black text-slate-400 shadow-sm">
           24h <span className={`inline-block transition-transform ${open ? 'rotate-180' : ''}`}>⌄</span>
         </span>
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 z-[80] mt-2 max-h-64 overflow-y-auto rounded-2xl border border-blue-100 bg-white p-2 shadow-2xl shadow-slate-900/15 ring-1 ring-slate-900/5">
-          <div className="mb-1 px-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
+        <div
+          className="absolute left-0 z-[120] mt-2 max-h-72 overflow-y-auto overflow-x-hidden rounded-2xl border border-blue-100 bg-white p-2 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-900/5"
+          style={{ width: 'min(280px, calc(100vw - 32px))', minWidth: 240 }}
+        >
+          <div className="mb-2 px-2 text-[9px] font-black uppercase tracking-widest text-slate-400">
             Chọn giờ 24h
           </div>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-4 gap-1.5">
             {options.map(option => {
               const isSelected = option === normalizedValue;
               return (
@@ -114,7 +117,7 @@ export const PremiumTimeSelect: React.FC<PremiumTimeSelectProps> = ({
                   key={option}
                   type="button"
                   onClick={() => chooseTime(option)}
-                  className={`rounded-xl px-2 py-2 text-center font-mono text-xs font-black transition ${isSelected ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50 hover:text-blue-700'}`}
+                  className={`min-w-0 whitespace-nowrap rounded-xl px-2 py-2 text-center font-mono text-[12px] font-black leading-none transition ${isSelected ? 'bg-blue-600 text-white shadow-sm' : 'bg-slate-50 text-slate-700 hover:bg-blue-50 hover:text-blue-700'}`}
                 >
                   {option}
                 </button>

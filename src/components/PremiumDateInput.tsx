@@ -181,8 +181,8 @@ export const PremiumDateInput: React.FC<PremiumDateInputProps> = ({
   };
 
   return (
-    <div ref={rootRef} className="relative w-full">
-      <div className="relative">
+    <div ref={rootRef} className="relative w-full min-w-0">
+      <div className="relative min-w-0">
         <input
           type="text"
           inputMode="numeric"
@@ -192,14 +192,14 @@ export const PremiumDateInput: React.FC<PremiumDateInputProps> = ({
           onChange={handleChange}
           onBlur={handleBlur}
           placeholder={placeholder}
-          className={`w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 pr-12 font-mono text-sm font-black tracking-wide text-slate-900 shadow-inner outline-none transition placeholder:text-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${open ? 'border-blue-500 bg-white ring-2 ring-blue-100' : ''} ${className}`}
+          className={`min-h-[46px] w-full min-w-0 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2.5 pr-10 font-mono text-[13px] font-black leading-none tracking-normal text-slate-900 shadow-inner outline-none transition placeholder:text-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:opacity-70 ${open ? 'border-blue-500 bg-white ring-2 ring-blue-100' : ''} ${className}`}
         />
         <button
           type="button"
           disabled={disabled}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => !disabled && setOpen(prev => !prev)}
-          className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm ring-1 ring-slate-200 transition active:scale-95 disabled:opacity-60"
+          className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg bg-white text-blue-600 shadow-sm ring-1 ring-slate-200 transition active:scale-95 disabled:opacity-60"
           aria-label="Mở lịch chọn ngày"
         >
           📅
@@ -207,7 +207,10 @@ export const PremiumDateInput: React.FC<PremiumDateInputProps> = ({
       </div>
 
       {open && (
-        <div className="absolute left-0 right-0 z-[90] mt-2 rounded-3xl border border-blue-100 bg-white p-3 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-900/5">
+        <div
+          className="absolute left-0 z-[120] mt-2 rounded-3xl border border-blue-100 bg-white p-3 shadow-2xl shadow-slate-900/20 ring-1 ring-slate-900/5"
+          style={{ width: 'min(320px, calc(100vw - 32px))', minWidth: 280 }}
+        >
           <div className="mb-3 flex items-center justify-between gap-2">
             <button
               type="button"

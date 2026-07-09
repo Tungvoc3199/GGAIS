@@ -9,12 +9,12 @@ import path from 'path';
 const RULES_PATH = path.join(process.cwd(), 'firestore.rules');
 const SERVER_PATH = path.join(process.cwd(), 'server.ts');
 const STUDENTS_PATH = path.join(process.cwd(), 'src/components/Students.tsx');
+const AUTH_PATH = path.join(process.cwd(), 'src/components/Auth.tsx');
 
 function checkRules() {
   console.log('=== STARTING STATIC SECURITY RULE CHECK ===');
   let anyFailed = false;
 
-  // 1. Check firestore.rules
   if (!fs.existsSync(RULES_PATH)) {
     console.error(`[ERROR] File firestore.rules không tồn tại tại: ${RULES_PATH}`);
     process.exit(1);
@@ -22,7 +22,13 @@ function checkRules() {
 
   const rulesContent = fs.readFileSync(RULES_PATH, 'utf8');
 
-  // Let's check for the 5 collections
+  if (/match\s+\/\{document=\*\*\}\s*\{\s*allow\s+read\s*,\s*write\s*:\s*if\s+false\s*;/.test(rulesContent)) {
+    console.log('[PASS] firestore.rules có catch-all deny mặc định.');
+  } else {
+    console.error('[FAIL] firestore.rules thiếu catch-all deny mặc định.');
+    anyFailed = true;
+  }
+
   const collectionsToCheck = [
     { name: 'students', matchPattern: /match\s+\/students\/\{studentId\}/ },
     { name: 'lessons', matchPattern: /match\s+\/lessons\/\{lessonId\}/ },
@@ -39,13 +45,7 @@ function checkRules() {
       continue;
     }
 
-    // Capture the block content after match up to the next outer closing brace
-    // To do this robustly without hitting the {studentId} closing brace:
-    // We look for `{` after the match pattern.
-    // However, `match /students/{studentId} {` has two opening braces: `{studentId}` and `{`.
-    // Let's count matching braces to properly find the body of this match block!
     const fromMatchIndex = rulesContent.slice(matchIndex);
-    // Find the opening brace '{' of the block itself (which is the one after {studentId})
     const blockStartIdx = fromMatchIndex.indexOf('{', fromMatchIndex.indexOf('{') + 1);
     if (blockStartIdx === -1) {
       console.error(`[FAIL] Không tìm thấy opening brace cho block ${collection.name}`);
@@ -53,7 +53,6 @@ function checkRules() {
       continue;
     }
 
-    // Now balance braces starting from blockStartIdx
     let braceCount = 1;
     let endBlockIndex = -1;
     for (let i = blockStartIdx + 1; i < fromMatchIndex.length; i++) {
@@ -75,8 +74,6 @@ function checkRules() {
     }
 
     const blockContent = fromMatchIndex.slice(blockStartIdx, endBlockIndex);
-    
-    // Check if contains "allow create, update, delete: if false;"
     const hasClientWriteLock = /allow\s+create\s*,\s*update\s*,\s*delete\s*:\s*if\s+false\s*;/.test(blockContent);
     if (hasClientWriteLock) {
       console.log(`[PASS] Collection ${collection.name} đã được khóa Client Writes hoàn toàn.`);
@@ -86,11 +83,8 @@ function checkRules() {
     }
   }
 
-  // 2. Check checkRestWriteFallbackAllowed implementation in server.ts
   if (fs.existsSync(SERVER_PATH)) {
     const serverContent = fs.readFileSync(SERVER_PATH, 'utf8');
-    
-    // Check if checkRestWriteFallbackAllowed simply returns true
     const fallbackTruePattern = /function\s+checkRestWriteFallbackAllowed\s*\([^)]*\)\s*:\s*boolean\s*\{\s*return\s+true\s*;?\s*\}/;
     if (fallbackTruePattern.test(serverContent) || serverContent.includes("function checkRestWriteFallbackAllowed(res: any): boolean {\n  return true;\n}")) {
       console.error(`[FAIL] checkRestWriteFallbackAllowed đang cho phép bypass ghi REST tự do (return true).`);
@@ -99,7 +93,6 @@ function checkRules() {
       console.log(`[PASS] checkRestWriteFallbackAllowed có cấu hình bảo mật.`);
     }
 
-    // Check if /api/payments/cancel route contains Accountant wide-access check or the specific ["Admin", "Accountant"] list definition
     const cancelEndpointIndex = serverContent.indexOf('/api/payments/cancel');
     if (cancelEndpointIndex !== -1) {
       const cancelScope = serverContent.slice(cancelEndpointIndex, cancelEndpointIndex + 500);
@@ -113,14 +106,19 @@ function checkRules() {
       console.error(`[FAIL] Không tìm thấy endpoint /api/payments/cancel trong server.ts`);
       anyFailed = true;
     }
+
+    if (/GEMINI_API_KEY\s*=\s*['"][^'"]+['"]/.test(serverContent)) {
+      console.error('[FAIL] server.ts có dấu hiệu hardcode GEMINI_API_KEY. Phải dùng process.env.GEMINI_API_KEY.');
+      anyFailed = true;
+    } else {
+      console.log('[PASS] Không phát hiện hardcode GEMINI_API_KEY trong server.ts.');
+    }
   } else {
     console.warn(`[WARN] Không tìm thấy server.ts để kiểm tra các chính sách.`);
   }
 
-  // 3. Check hardcoded DOB in Students.tsx
   if (fs.existsSync(STUDENTS_PATH)) {
     const studentsContent = fs.readFileSync(STUDENTS_PATH, 'utf8');
-    // Pattern finding useState('YYYY-MM-DD')
     const hardcodedDobPattern = /useState\s*\(\s*['"]\d{4}-\d{2}-\d{2}['"]\s*\)/;
     if (hardcodedDobPattern.test(studentsContent)) {
       console.error(`[FAIL] Students.tsx chứa ngày sinh mặc định giả được hardcode.`);
@@ -130,6 +128,32 @@ function checkRules() {
     }
   } else {
     console.warn(`[WARN] Không tìm thấy Students.tsx để kiểm tra DOB.`);
+  }
+
+  if (fs.existsSync(AUTH_PATH)) {
+    const authContent = fs.readFileSync(AUTH_PATH, 'utf8');
+    if (authContent.includes('DefaultPassword123')) {
+      console.error('[FAIL] Auth.tsx còn chứa demo password dạng plain text DefaultPassword123.');
+      anyFailed = true;
+    } else {
+      console.log('[PASS] Auth.tsx không còn chứa demo password dạng plain text.');
+    }
+
+    if (authContent.includes('env.PROD') && authContent.includes('!isProduction')) {
+      console.log('[PASS] Auth.tsx có production guard cho Demo/Simulation UI.');
+    } else {
+      console.error('[FAIL] Auth.tsx thiếu production guard cho Demo/Simulation UI.');
+      anyFailed = true;
+    }
+
+    if (/toggleDatabaseMode\(true\)/.test(authContent) && !authContent.includes("showToggle && error.includes('auth/operation-not-allowed')")) {
+      console.error('[FAIL] Nút fallback Simulation khi lỗi auth chưa bị khóa bởi showToggle.');
+      anyFailed = true;
+    } else {
+      console.log('[PASS] Fallback Simulation trong Auth.tsx bị khóa theo showToggle.');
+    }
+  } else {
+    console.warn(`[WARN] Không tìm thấy Auth.tsx để kiểm tra Demo/Simulation.`);
   }
 
   if (anyFailed) {

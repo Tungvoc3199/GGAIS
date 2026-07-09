@@ -11,6 +11,8 @@ const SERVER_PATH = path.join(process.cwd(), 'server.ts');
 const STUDENTS_PATH = path.join(process.cwd(), 'src/components/Students.tsx');
 const AUTH_PATH = path.join(process.cwd(), 'src/components/Auth.tsx');
 const MAIN_PATH = path.join(process.cwd(), 'src/main.tsx');
+const AUTH_STORAGE_GUARD_PATH = path.join(process.cwd(), 'src/security/authStorageGuard.ts');
+const APP_PATH = path.join(process.cwd(), 'src/App.tsx');
 
 function checkRules() {
   console.log('=== STARTING STATIC SECURITY RULE CHECK ===');
@@ -159,19 +161,43 @@ function checkRules() {
 
   if (fs.existsSync(MAIN_PATH)) {
     const mainContent = fs.readFileSync(MAIN_PATH, 'utf8');
-    const hasBootstrapGuard = mainContent.includes('hardenAuthBootstrapStorage')
-      && mainContent.includes("localStorage.removeItem('lhp_user')")
-      && mainContent.includes("localStorage.setItem('lhp_use_local_simulation', 'false')")
-      && mainContent.includes('canUseLocalSimulation');
-
-    if (hasBootstrapGuard) {
-      console.log('[PASS] main.tsx có auth bootstrap guard để xóa role cache không tin cậy.');
+    if (mainContent.includes('installAuthStorageGuard') && mainContent.indexOf('installAuthStorageGuard()') < mainContent.indexOf('createRoot(')) {
+      console.log('[PASS] main.tsx cài auth storage guard trước khi render React.');
     } else {
-      console.error('[FAIL] main.tsx thiếu auth bootstrap guard cho lhp_user/lhp_use_local_simulation.');
+      console.error('[FAIL] main.tsx thiếu installAuthStorageGuard trước createRoot.');
       anyFailed = true;
     }
   } else {
     console.warn(`[WARN] Không tìm thấy main.tsx để kiểm tra auth bootstrap guard.`);
+  }
+
+  if (fs.existsSync(AUTH_STORAGE_GUARD_PATH)) {
+    const guardContent = fs.readFileSync(AUTH_STORAGE_GUARD_PATH, 'utf8');
+    const hasCacheSplit = guardContent.includes('lhp_local_demo_user')
+      && guardContent.includes('lhp_user')
+      && guardContent.includes('guardedSetItem')
+      && guardContent.includes('guardedGetItem')
+      && guardContent.includes('canUseLocalSimulation')
+      && guardContent.includes('originalRemoveItem(LEGACY_USER_KEY)');
+
+    if (hasCacheSplit) {
+      console.log('[PASS] authStorageGuard.ts tách cache demo khỏi legacy lhp_user và chặn cache cloud không tin cậy.');
+    } else {
+      console.error('[FAIL] authStorageGuard.ts thiếu cơ chế tách lhp_local_demo_user / chặn lhp_user.');
+      anyFailed = true;
+    }
+  } else {
+    console.error('[FAIL] Thiếu src/security/authStorageGuard.ts.');
+    anyFailed = true;
+  }
+
+  if (fs.existsSync(APP_PATH)) {
+    const appContent = fs.readFileSync(APP_PATH, 'utf8');
+    if (appContent.includes('isFirebase && !authReady')) {
+      console.log('[PASS] App.tsx có auth restore gate trước màn đăng nhập.');
+    } else {
+      console.warn('[WARN] App.tsx chưa có auth restore gate riêng; storage guard vẫn chạy trước render.');
+    }
   }
 
   if (anyFailed) {

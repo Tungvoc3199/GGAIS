@@ -7,10 +7,40 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase SDK
 const app = initializeApp(firebaseConfig);
+
+const setupAppCheck = () => {
+  const siteKey = String((import.meta as any).env.VITE_FIREBASE_APP_CHECK_SITE_KEY || '').trim();
+  const debugToken = String((import.meta as any).env.VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN || '').trim();
+  const isProduction = (import.meta as any).env.PROD === true;
+  const isDev = (import.meta as any).env.DEV === true;
+
+  if (!siteKey) {
+    if (isProduction) {
+      console.warn('Firebase App Check chưa được cấu hình. Hãy set VITE_FIREBASE_APP_CHECK_SITE_KEY trước khi bật enforcement.');
+    }
+    return;
+  }
+
+  try {
+    if (!isProduction && isDev && debugToken) {
+      (self as any).FIREBASE_APPCHECK_DEBUG_TOKEN = debugToken === 'true' ? true : debugToken;
+    }
+
+    initializeAppCheck(app, {
+      provider: new ReCaptchaV3Provider(siteKey),
+      isTokenAutoRefreshEnabled: true
+    });
+  } catch (err) {
+    console.warn('Không thể khởi tạo Firebase App Check:', err);
+  }
+};
+
+setupAppCheck();
 
 // Initialize Firestore
 export const db = firebaseConfig.firestoreDatabaseId && firebaseConfig.firestoreDatabaseId !== '(default)'

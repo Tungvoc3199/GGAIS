@@ -10,6 +10,7 @@ const RULES_PATH = path.join(process.cwd(), 'firestore.rules');
 const SERVER_PATH = path.join(process.cwd(), 'server.ts');
 const STUDENTS_PATH = path.join(process.cwd(), 'src/components/Students.tsx');
 const AUTH_PATH = path.join(process.cwd(), 'src/components/Auth.tsx');
+const MAIN_PATH = path.join(process.cwd(), 'src/main.tsx');
 
 function checkRules() {
   console.log('=== STARTING STATIC SECURITY RULE CHECK ===');
@@ -154,6 +155,23 @@ function checkRules() {
     }
   } else {
     console.warn(`[WARN] Không tìm thấy Auth.tsx để kiểm tra Demo/Simulation.`);
+  }
+
+  if (fs.existsSync(MAIN_PATH)) {
+    const mainContent = fs.readFileSync(MAIN_PATH, 'utf8');
+    const hasBootstrapGuard = mainContent.includes('hardenAuthBootstrapStorage')
+      && mainContent.includes("localStorage.removeItem('lhp_user')")
+      && mainContent.includes("localStorage.setItem('lhp_use_local_simulation', 'false')")
+      && mainContent.includes('canUseLocalSimulation');
+
+    if (hasBootstrapGuard) {
+      console.log('[PASS] main.tsx có auth bootstrap guard để xóa role cache không tin cậy.');
+    } else {
+      console.error('[FAIL] main.tsx thiếu auth bootstrap guard cho lhp_user/lhp_use_local_simulation.');
+      anyFailed = true;
+    }
+  } else {
+    console.warn(`[WARN] Không tìm thấy main.tsx để kiểm tra auth bootstrap guard.`);
   }
 
   if (anyFailed) {

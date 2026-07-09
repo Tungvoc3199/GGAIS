@@ -6,13 +6,33 @@
 import fs from 'fs';
 import path from 'path';
 
-const RULES_PATH = path.join(process.cwd(), 'firestore.rules');
-const SERVER_PATH = path.join(process.cwd(), 'server.ts');
-const STUDENTS_PATH = path.join(process.cwd(), 'src/components/Students.tsx');
-const AUTH_PATH = path.join(process.cwd(), 'src/components/Auth.tsx');
-const MAIN_PATH = path.join(process.cwd(), 'src/main.tsx');
-const AUTH_STORAGE_GUARD_PATH = path.join(process.cwd(), 'src/security/authStorageGuard.ts');
-const APP_PATH = path.join(process.cwd(), 'src/App.tsx');
+const ROOT = process.cwd();
+const RULES_PATH = path.join(ROOT, 'firestore.rules');
+const SERVER_PATH = path.join(ROOT, 'server.ts');
+const STUDENTS_PATH = path.join(ROOT, 'src/components/Students.tsx');
+const AUTH_PATH = path.join(ROOT, 'src/components/Auth.tsx');
+const MAIN_PATH = path.join(ROOT, 'src/main.tsx');
+const AUTH_STORAGE_GUARD_PATH = path.join(ROOT, 'src/security/authStorageGuard.ts');
+const APP_PATH = path.join(ROOT, 'src/App.tsx');
+const FIREBASE_SERVICE_PATH = path.join(ROOT, 'src/services/firebase.ts');
+const ENV_EXAMPLE_PATH = path.join(ROOT, '.env.example');
+
+function listRepoFiles(dir, acc = []) {
+  if (!fs.existsSync(dir)) return acc;
+  const blockedDirs = new Set(['.git', 'node_modules', 'dist', 'build', 'coverage']);
+
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (blockedDirs.has(entry.name)) continue;
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      listRepoFiles(fullPath, acc);
+    } else {
+      acc.push(fullPath);
+    }
+  }
+
+  return acc;
+}
 
 function checkRules() {
   console.log('=== STARTING STATIC SECURITY RULE CHECK ===');
@@ -189,6 +209,65 @@ function checkRules() {
   } else {
     console.error('[FAIL] Thiếu src/security/authStorageGuard.ts.');
     anyFailed = true;
+  }
+
+  if (fs.existsSync(FIREBASE_SERVICE_PATH)) {
+    const firebaseContent = fs.readFileSync(FIREBASE_SERVICE_PATH, 'utf8');
+    const hasAppCheck = firebaseContent.includes('initializeAppCheck')
+      && firebaseContent.includes('ReCaptchaV3Provider')
+      && firebaseContent.includes('VITE_FIREBASE_APP_CHECK_SITE_KEY')
+      && firebaseContent.includes('isTokenAutoRefreshEnabled');
+
+    if (hasAppCheck) {
+      console.log('[PASS] firebase.ts có cấu hình Firebase App Check tùy chọn cho production.');
+    } else {
+      console.error('[FAIL] firebase.ts thiếu cấu hình Firebase App Check production guard.');
+      anyFailed = true;
+    }
+  } else {
+    console.error('[FAIL] Thiếu src/services/firebase.ts để kiểm tra App Check.');
+    anyFailed = true;
+  }
+
+  if (fs.existsSync(ENV_EXAMPLE_PATH)) {
+    const envExample = fs.readFileSync(ENV_EXAMPLE_PATH, 'utf8');
+    if (envExample.includes('VITE_FIREBASE_APP_CHECK_SITE_KEY=') && envExample.includes('VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN=')) {
+      console.log('[PASS] .env.example có biến Firebase App Check.');
+    } else {
+      console.error('[FAIL] .env.example thiếu biến Firebase App Check.');
+      anyFailed = true;
+    }
+  }
+
+  const envFiles = listRepoFiles(ROOT).filter(file => {
+    const base = path.basename(file);
+    return base.startsWith('.env') && base !== '.env.example';
+  });
+  const productionSecurityCheck = process.env.NODE_ENV === 'production' || process.env.CI === 'true' || process.env.VITE_PRODUCTION_SECURITY_CHECK === 'true';
+
+  for (const file of envFiles) {
+    const rel = path.relative(ROOT, file).replace(/\\/g, '/');
+    const content = fs.readFileSync(file, 'utf8');
+
+    if (/VITE_ENABLE_DEMO_MODE\s*=\s*true/i.test(content)) {
+      const msg = `${rel} đang bật VITE_ENABLE_DEMO_MODE=true.`;
+      if (productionSecurityCheck) {
+        console.error(`[FAIL] ${msg}`);
+        anyFailed = true;
+      } else {
+        console.warn(`[WARN] ${msg} Chỉ được dùng ở local dev.`);
+      }
+    }
+
+    if (/VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN\s*=\s*\S+/i.test(content)) {
+      const msg = `${rel} đang set VITE_FIREBASE_APP_CHECK_DEBUG_TOKEN.`;
+      if (productionSecurityCheck) {
+        console.error(`[FAIL] ${msg}`);
+        anyFailed = true;
+      } else {
+        console.warn(`[WARN] ${msg} Chỉ được dùng ở local dev.`);
+      }
+    }
   }
 
   if (fs.existsSync(APP_PATH)) {

@@ -6,12 +6,13 @@
 import React, { useState } from 'react';
 import { useDatabase } from '../context/DatabaseContext';
 import { UserRole } from '../types';
-import { ShieldCheck, User as UserIcon, Keyboard, AlertCircle, Car } from 'lucide-react';
+import { AlertCircle, Car, Eye, EyeOff } from 'lucide-react';
 
 export const Auth: React.FC = () => {
   const { login, authReady, isSubmittingLogin, isFirebase, toggleDatabaseMode } = useDatabase();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
 
   // Predefined demo accounts. These are available only when the app is not a production build.
@@ -234,13 +235,24 @@ export const Auth: React.FC = () => {
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-widest mb-2">
                 Mật khẩu đăng nhập
               </label>
-              <input
-                type="password"
-                placeholder="••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="block w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 px-4 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="block w-full rounded-2xl border border-slate-200 bg-slate-50 py-3 pl-4 pr-12 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:bg-white transition-all"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                  aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                  title={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                >
+                  {showPassword ? <EyeOff className="h-4.5 w-4.5" /> : <Eye className="h-4.5 w-4.5" />}
+                </button>
+              </div>
             </div>
 
             <button

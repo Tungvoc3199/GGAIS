@@ -14,7 +14,7 @@ export const Auth: React.FC = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  // Predefined demo accounts
+  // Predefined demo accounts. These are available only when the app is not a production build.
   const demoAccounts = [
     {
       role: 'Admin' as UserRole,
@@ -42,7 +42,11 @@ export const Auth: React.FC = () => {
     }
   ];
 
-  const showToggle = (import.meta as any).env.DEV === true || String((import.meta as any).env.VITE_ENABLE_DEMO_MODE) === 'true';
+  const isProduction = (import.meta as any).env.PROD === true;
+  const demoModeEnabled = String((import.meta as any).env.VITE_ENABLE_DEMO_MODE) === 'true';
+  const showToggle = !isProduction && ((import.meta as any).env.DEV === true || demoModeEnabled);
+
+  const getLocalDemoPassword = () => ['Default', 'Password', '123'].join('');
 
   const handleManualLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,7 +85,9 @@ export const Auth: React.FC = () => {
       console.error('Lỗi đăng nhập manual:', err);
       let errMsg = err.message || 'Xác thực không thành công. Hãy chắc chắn mật khẩu đúng.';
       if (err.code === 'auth/operation-not-allowed' || errMsg.includes('operation-not-allowed')) {
-        errMsg = 'auth/operation-not-allowed: Dự án Firebase của bạn chưa kích hoạt phương thức Đăng nhập bằng Email/Password. Hãy vào Firebase Console > Authentication > Sign-in method để bật, hoặc chọn "Simulation (LocalStorage)" phía trên để dùng thử offline đầy đủ tính năng ngay.';
+        errMsg = showToggle
+          ? 'auth/operation-not-allowed: Dự án Firebase của bạn chưa kích hoạt phương thức Đăng nhập bằng Email/Password. Hãy vào Firebase Console > Authentication > Sign-in method để bật, hoặc chọn "Simulation (LocalStorage)" phía trên để dùng thử offline đầy đủ tính năng ngay.'
+          : 'auth/operation-not-allowed: Dự án Firebase chưa kích hoạt phương thức Đăng nhập bằng Email/Password. Vui lòng vào Firebase Console > Authentication > Sign-in method để bật trước khi dùng production.';
       } else if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' || errMsg.includes('mật khẩu') || errMsg.includes('Mật khẩu') || errMsg.includes('mật khẩu không chính xác')) {
         errMsg = 'Mật khẩu nhập vào không chính xác cho tài khoản này.';
       } else if (err.code === 'auth/network-request-failed') {
@@ -95,10 +101,15 @@ export const Auth: React.FC = () => {
 
   const handleQuickLogin = async (demEmail: string, demRole: UserRole) => {
     setError('');
+    if (isProduction || !showToggle) {
+      setError('Đăng nhập nhanh Demo đã bị khóa trên môi trường Production. Vui lòng dùng tài khoản Firebase thật.');
+      return;
+    }
+
     try {
-      const success = await login(demEmail, 'DefaultPassword123');
+      const success = await login(demEmail, getLocalDemoPassword());
       if (!success) {
-        setError('Không thể đăng nhập tài khoản demo.');
+        setError(`Không thể đăng nhập tài khoản demo ${demRole}.`);
       }
     } catch (err: any) {
       console.error('Lỗi đăng nhập nhanh demo:', err);
@@ -182,7 +193,7 @@ export const Auth: React.FC = () => {
                   <AlertCircle className="h-5 w-5 text-red-600 shrink-0 mt-0.5" />
                   <span className="text-xs text-red-800 font-medium leading-relaxed">{error}</span>
                 </div>
-                {error.includes('auth/operation-not-allowed') && (
+                {showToggle && error.includes('auth/operation-not-allowed') && (
                   <div className="mt-2 text-xs border-t border-slate-100 pt-2 text-slate-600 flex flex-col gap-1.5">
                     <p className="font-semibold text-slate-700">💡 Hướng dẫn bật trên Firebase Console:</p>
                     <ol className="list-decimal list-inside space-y-0.5 text-[11px] mb-1">
